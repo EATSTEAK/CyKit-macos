@@ -10,6 +10,14 @@ export interface QualityMap {
   [sensorName: string]: QualityLevel;
 }
 
+/**
+ * EMA smoothing factor for auto-baseline DC removal.
+ * 0.995 → ~200-sample half-life at 128Hz ≈ 1.5 sec settling time.
+ * This removes the large DC offset (~4200µV) from pre-converted data
+ * while preserving EEG waveform dynamics.
+ */
+const DC_SMOOTH = 0.995;
+
 export function useEEGData() {
   const ringBufferRef = useRef(
     new MultiChannelRingBuffer(MAX_CHANNELS, SAMPLES_PER_CHANNEL),
@@ -17,6 +25,9 @@ export function useEEGData() {
   const qualityRef = useRef<QualityMap>({});
   const baselineRef = useRef<number[]>(new Array(MAX_CHANNELS).fill(0));
   const baselineInitRef = useRef(false);
+  /** Per-channel DC offset estimated via exponential moving average */
+  const dcOffsetRef = useRef<number[]>(new Array(MAX_CHANNELS).fill(0));
+  const dcInitRef = useRef(false);
 
   const handleData = useCallback(
     (
@@ -36,8 +47,21 @@ export function useEEGData() {
 
       // Parse EEG samples and push to ring buffer
       const samples = modelConfig.parseSample(contact, parseOpts);
+      const dc = dcOffsetRef.current;
+
       for (const { channelIndex, value } of samples) {
-        ringBufferRef.current.pushSample(channelIndex, value);
+        // Auto DC offset removal via EMA
+        if (!dcInitRef.current) {
+          dc[channelIndex] = value;
+        } else {
+          dc[channelIndex] = dc[channelIndex] * DC_SMOOTH + value * (1 - DC_SMOOTH);
+        }
+        // Push DC-removed value to ring buffer
+        ringBufferRef.current.pushSample(channelIndex, value - dc[channelIndex]);
+      }
+
+      if (!dcInitRef.current && samples.length > 0) {
+        dcInitRef.current = true;
       }
 
       // Update quality
@@ -59,6 +83,11 @@ export function useEEGData() {
     baselineInitRef.current = false;
   }, []);
 
+  const resetDcOffset = useCallback(() => {
+    dcOffsetRef.current.fill(0);
+    dcInitRef.current = false;
+  }, []);
+
   const updateBaseline = useCallback(() => {
     const rb = ringBufferRef.current;
     for (let ch = 0; ch < rb.channelCount; ch++) {
@@ -77,7 +106,8 @@ export function useEEGData() {
     ringBufferRef.current.clear();
     qualityRef.current = {};
     resetBaseline();
-  }, [resetBaseline]);
+    resetDcOffset();
+  }, [resetBaseline, resetDcOffset]);
 
   return {
     ringBuffer: ringBufferRef,

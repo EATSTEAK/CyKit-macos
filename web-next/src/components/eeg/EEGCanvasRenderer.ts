@@ -121,12 +121,14 @@ export class EEGCanvasRenderer {
     const ctx = this.ctx;
     const rx = Math.round(x);
     const rox = Math.round(this.oldx);
+    const prevY = this.oldy[channelIdx] ?? (y + offset);
 
     ctx.beginPath();
     ctx.lineWidth = this.config.lineWidth;
     ctx.strokeStyle = color;
-    ctx.moveTo(rox + 1, y + offset);
-    ctx.lineTo(rx, this.oldy[channelIdx] || y + offset);
+    // Line from previous point to current point
+    ctx.moveTo(rox, prevY);
+    ctx.lineTo(rx, y + offset);
     ctx.stroke();
 
     this.oldy[channelIdx] = y + offset;
@@ -150,16 +152,18 @@ export class EEGCanvasRenderer {
   private moveForward(): void {
     this.scrollScreen();
 
+    // Save old position before advancing — drawDot needs the previous x
+    // to draw a line segment connecting consecutive samples.
+    this.oldx = this.cx;
+
     if (this.config.scrollMode) {
       this.cx = this.width - 5;
-      this.oldx = this.cx;
     } else {
       this.cx += 1;
-      this.oldx = this.cx;
 
       if (this.cx > this.width) {
-        this.oldx = 0;
         this.cx = 0;
+        this.oldx = 0;
         this.clearCanvas();
       }
     }
@@ -201,9 +205,11 @@ export class EEGCanvasRenderer {
         for (let i = 0; i < activeChannels.length; i++) {
           const ch = activeChannels[i];
           const channel = rb.getChannel(ch);
-          const rawValue = channel.getFromEnd(fromEnd);
-          const baselineVal = useBaseline ? (baseline[ch] || 0) : 0;
-          const value = (baselineVal - rawValue) * resolution;
+          // Ring buffer already stores DC-removed values (via EMA in useEEGData).
+          // The optional calibration baseline provides additional fine offset.
+          const sample = channel.getFromEnd(fromEnd);
+          const calibration = useBaseline ? (baseline[ch] || 0) : 0;
+          const value = (calibration - sample) * resolution;
           const yOffset = step * (i + 1);
           const color = CHANNEL_COLORS[ch % CHANNEL_COLORS.length];
 

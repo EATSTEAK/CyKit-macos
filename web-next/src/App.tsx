@@ -62,6 +62,8 @@ export default function App() {
     onStatusChange: (status) => {
       if (status === "connected") {
         ws.sendCommand(commands.setDataMode(1));
+        // Enable Python-side baseline immediately (DC offset removal)
+        ws.sendCommand(commands.setBaselineMode(1));
       }
       if (status === "disconnected") {
         deviceInfo.reset();
