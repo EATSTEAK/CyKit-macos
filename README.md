@@ -1,88 +1,120 @@
 <img src="https://raw.githubusercontent.com/CymatiCorp/CyKit/git-images/Images/CyKIT5.png" width=34% height=34%  />
 
+# CyKIT 4.0 -- Cross-platform Emotiv EEG
 
-CyKIT 3.0 for Python 3.x (Linux)
-=
-Until MAC/Linux support can be integrated into this repository, <br>
-Please see this branch for MAC/Linux support. <br>
-https://github.com/tahesse/CyKITv2
+CyKIT is an open-source data acquisition tool for Emotiv EEG headsets (Epoc, Insight, Epoc+).
+It runs on **macOS, Linux, and Windows** with Python 3.10+.
 
-CyKIT 3.0 for Python 3.7.x (Windows)
-=
+## Installation
 
-Last Updated: [ December 27, 2018 - 1:00pm ]
-
-Language Support (Python 3.x)
-----------------
+```bash
+pip install -e .
+# or with uv:
+uv pip install -e .
 ```
 
- Supported Python 3 Versions
-¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+### Dependencies
 
-Python 3.4.x  (32-bit or 64-bit)
-Python 3.6.x  (32-bit or 64-bit) 
-Python 3.7.x  (32-bit or 64-bit) 
-Python 3.8.x  (32-bit or 64-bit) 
-Python 3.9.x  (32-bit or 64-bit)
+| Package         | Purpose                      |
+| --------------- | ---------------------------- |
+| `pycryptodomex` | AES decryption of EEG data   |
+| `bleak`         | Bluetooth LE (macOS / Linux) |
+| `pyusb`         | USB communication via libusb |
 
-Latest Python Build: Python 3.9.5
+On macOS you may also need:
 
-Python 2.7.6 support will now be limited.
-Python 3+ will be the focus. (Please upgrade accordingly.)
-
+```bash
+brew install libusb
 ```
 
-Headset Support
-----------------
-Does not currently work with Epoc-X  <br>
-See Discord for details about Flex. 
+## Quick Start
 
-Program Flowchart
--------------------
+```bash
+# CLI entry point
+cykit 127.0.0.1 54123 6 noweb
 
-<img src="https://raw.githubusercontent.com/CymatiCorp/CyKit/git-images/Images/CyKIT-Flowchart.png" />
-(MATLAB/Unity3D plugins have been created, but currently not included in repository) <br><br>
+# or via python -m
+python -m cykit 127.0.0.1 54123 6 noweb
 
-Browser Interface
--------------------
+# help
+cykit --help
+```
+
+### Supported Models
+
+| #   | Headset            | Mode           |
+| --- | ------------------ | -------------- |
+| 1   | Epoc (Premium)     | 14-bit, 128 Hz |
+| 2   | Epoc (Consumer)    | 14-bit, 128 Hz |
+| 3   | Insight (Premium)  | 128 Hz         |
+| 4   | Insight (Consumer) | 128 Hz         |
+| 5   | Epoc+ (Premium)    | 16-bit, 256 Hz |
+| 6   | Epoc+ (Consumer)   | 16-bit, 256 Hz |
+| 7   | Epoc+ (Consumer)   | 14-bit, 128 Hz |
+
+### Bluetooth LE
+
+```bash
+# Auto-detect paired device
+cykit 127.0.0.1 54123 4 bluetooth+noweb
+
+# Specify 8-hex-digit key from device name
+cykit 127.0.0.1 54123 4 bluetooth=AABBCCDD+noweb
+```
+
+## Project Structure
+
+```
+CyKit/
+├── src/cykit/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── main.py          # CLI entry point
+│   ├── eeg.py           # EEG data acquisition & processing
+│   ├── websocket.py     # WebSocket / TCP server
+│   └── platform_ble/    # Bluetooth LE (bleak)
+│       ├── __init__.py
+│       ├── base.py
+│       └── bleak_backend.py
+├── examples/
+│   ├── usb_epoc_plus.py
+│   └── ble_insight.py
+├── Web/                 # Browser interface
+├── pyproject.toml
+└── README.md
+```
+
+## Headset Support
+
+Does not currently work with Epoc-X.
+See Discord for details about Flex.
+
+## Browser Interface
 
 <img src="https://raw.githubusercontent.com/CymatiCorp/CyKit/git-images/Images/CyKIT-Preview.png" />
 
-Documentation
--------------------
-```
-Introduction
-```
-* [CyKIT 3.0 (wikipage)](https://github.com/CymatiCorp/CyKit/wiki/CyKIT-3.0-Documentation)
-```
-Software (How To)
-```
-* [How to Install CyKIT](https://github.com/CymatiCorp/CyKit/wiki/How-to-Install-CyKIT)
-* [How to Stream Data to OpenViBE](https://github.com/CymatiCorp/CyKit/wiki/How-to-Stream-Data-to-OpenViBE)
-* [How to Pair USB device](https://github.com/CymatiCorp/CyKit/wiki/How-to-Pair-USB-device)
-* [How to Change EPOC+ hertz modes](https://github.com/CymatiCorp/CyKit/wiki//How-to-Change-EPOC(plus)--modes)  
+## Documentation
 
+- [CyKIT 3.0 (wikipage)](https://github.com/CymatiCorp/CyKit/wiki/CyKIT-3.0-Documentation)
+- [How to Install CyKIT](https://github.com/CymatiCorp/CyKit/wiki/How-to-Install-CyKIT)
+- [How to Stream Data to OpenViBE](https://github.com/CymatiCorp/CyKit/wiki/How-to-Stream-Data-to-OpenViBE)
+- [How to Pair USB device](https://github.com/CymatiCorp/CyKit/wiki/How-to-Pair-USB-device)
+- [How to Change EPOC+ hertz modes](<https://github.com/CymatiCorp/CyKit/wiki//How-to-Change-EPOC(plus)--modes>)
 
-Communication
--
-Chat Discussion: https://discordapp.com/invite/gTYNWc7 <br>
-(Do not need discord app, just click for browser chat)
+## Communication
 
-Version History
--
-Deprecated CyKIT versions can be found here: <br>
-[(CyKIT Version History)](https://github.com/CymatiCorp/CyKit/tree/git-images/History/) <br>
+Chat Discussion: https://discordapp.com/invite/gTYNWc7
+
+## Version History
 
 ```
 CyKIT v1.0 python 2.7.6 (2014)
 CyKIT v1.0 python 3.3.x (2015)
 CyKIT v2.0 Python 2.7.6 (2018.Jan.29)
+CyKIT v3.0 Python 3.x   (2018.Dec.26)
+CyKIT v3.1 Python 3.10+  (2024)
 ```
 
-Documentation
--
+## Documentation
 
 [Bluetooth Development Documentation](https://github.com/CymatiCorp/CyKit/blob/git-images/Documentation/Bluetooth_Development-Epoc.pdf)
-
-
-<br><br>
