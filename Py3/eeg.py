@@ -1056,7 +1056,11 @@ class EEG(object):
                                     tasks.put(encrypted_data)
 
                     _ble.subscribe_notifications(DATA_UUID_BARE, _ble_data_callback)
-                    _ble.subscribe_notifications(MEMS_UUID_BARE, _ble_data_callback)
+                    try:
+                        _ble.subscribe_notifications(MEMS_UUID_BARE, _ble_data_callback)
+                    except Exception:
+                        mirror.text("> MEMS characteristic not available as separate channel.")
+                        mirror.text("  (Gyro data is embedded in the DATA stream — this is normal for Insight2.)")
 
                     self.device = _ble  # store backend as device handle
                     devicesUsed += 1
