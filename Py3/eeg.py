@@ -33,7 +33,14 @@ import random
 #  Import C functions for Bluetooth.
 # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
 from ctypes import *
-from ctypes.wintypes import HANDLE, ULONG, DWORD, USHORT
+import platform as _platform
+if _platform.system() == 'Windows':
+    from ctypes.wintypes import HANDLE, ULONG, DWORD, USHORT
+else:
+    HANDLE = c_void_p
+    ULONG = c_ulong
+    DWORD = c_uint32
+    USHORT = c_ushort
 
 #  Detect 32 / 64 Bit Architecture.
 # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
@@ -41,11 +48,9 @@ arch = struct.calcsize("P") * 8
 
 #  Add a relative local path to CyKIT.
 # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-localPath = ((sys.argv[0]).replace('/','\\')).split('\\')
-localPath = localPath[0:(len(localPath) -1)]
-localPath = str('\\'.join(localPath ))
-if localPath == None:
-    localPath = ".\\"
+localPath = os.path.dirname(os.path.abspath(sys.argv[0]))
+if not localPath:
+    localPath = os.path.abspath(".")
 
 sys.path.insert(0, localPath)
 
@@ -105,75 +110,103 @@ if parameters > 4 and "path" in eeg_config:
     mirror.text("[Python Search Path] " + str(sys.path))
 
 
-#  Setup [ pyUSB (Default) / pywinusb ]
-# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-if parameters > 4 and "pywinusb" in eeg_config:
+#  Setup [ pyUSB (Default) / pywinusb / bluetooth ]
+# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+if parameters > 4 and "bluetooth" in eeg_config:
+    # BLE mode — skip USB driver imports entirely.
+    eeg_driver = "bluetooth_pending"
+elif parameters > 4 and "pywinusb" in eeg_config:
     if verbose == True:
-        mirror.text("> Importing (pywinusb) \\cyPyWinUSB")
-    
+        mirror.text("> Importing (pywinusb) cyPyWinUSB")
+
     eeg_driver = "pywinusb"
-    sys.path.insert(0, localPath + '\\cyPyWinUSB')
+    sys.path.insert(0, os.path.join(localPath, 'cyPyWinUSB'))
     import cyPyWinUSB as hid
 else:
     if verbose == True:
-        mirror.text("> Importing (pyusb) \\cyPyUSB")
+        mirror.text("> Importing (pyusb) cyPyUSB")
     eeg_driver = "pyusb"
-    sys.path.insert(0, localPath + '\\cyUSB')
-    sys.path.insert(0, localPath + '\\cyUSB\\libusb')
+    sys.path.insert(0, os.path.join(localPath, 'cyUSB'))
+    sys.path.insert(0, os.path.join(localPath, 'cyUSB', 'libusb'))
     import cyPyUSB
     import cyPyUSB.core
     import cyPyUSB.util
     import cyPyUSB.backend.libusb1
 
 if parameters > 4 and "bluetooth" in eeg_config:
-    
-    BT_manualkey = "AUTO-DETECT"    
-    
+
+    BT_manualkey = "AUTO-DETECT"
+
     if "bluetooth=" in eeg_config:
         split_bt = str(eeg_config).split("bluetooth=")
-        
+
         if len(split_bt) > 1:
             if "+" in split_bt[1]:
                 BT_manualkey = str(split_bt[1]).split("+")[0]
             else:
                 BT_manualkey = split_bt[1]
 
-            if len(BT_manualkey) > 8 or len(BT_manualkey) < 8:
+            if len(BT_manualkey) != 8:
                 mirror.text("> Incorrect Key Length. Bluetooth key is 8 hex digits long. ")
-                mirror.text("> (Locate in the EPOC+(xxxxxxxx) title, in Windows Bluetooth settings.)")
+                mirror.text("> (Locate in the device name, e.g. Insight(AABBCCDD), in OS Bluetooth settings.)")
                 mirror.text("\r\n> Defaulting to auto-detect bluetooth. ")
-    
-    mirror.text("\r\n> Trying Bluetooth Key >>> " + str(BT_manualkey))
-    sys.path.insert(0, localPath + '.\\cyDrivers') 
+                BT_manualkey = "AUTO-DETECT"
 
-    try:
-        eegDLL = cdll.LoadLibrary(localPath + "\\cyDrivers\EEGBtleLib" + str(arch) + ".dll")
-        
-    except Exception as e:
-        mirror.text("> Bluetooth Library not loaded. ")
-        mirror.text(" Error " + str(e))
-        os._exit(0)
-    
+    mirror.text("\r\n> Trying Bluetooth Key >>> " + str(BT_manualkey))
+
+    #  Platform-specific BLE initialization
+    # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+    _ble_backend = None
+    eegDLL = None
+
+    if _platform.system() != 'Windows':
+        # macOS / Linux: use bleak-based BLE backend
+        try:
+            from platform_ble import get_ble_backend
+            _ble_backend = get_ble_backend()
+            if _ble_backend is None:
+                mirror.text("> BLE backend not available for this platform.")
+                os._exit(0)
+        except ImportError as e:
+            mirror.text("> Failed to load BLE backend: " + str(e))
+            mirror.text("> Install bleak: pip install bleak")
+            os._exit(0)
+    else:
+        # Windows: use EEGBtleLib DLL
+        sys.path.insert(0, os.path.join(localPath, 'cyDrivers'))
+        try:
+            eegDLL = cdll.LoadLibrary(os.path.join(localPath, "cyDrivers", "EEGBtleLib" + str(arch) + ".dll"))
+        except Exception as e:
+            mirror.text("> Bluetooth Library not loaded. ")
+            mirror.text(" Error " + str(e))
+            os._exit(0)
+
     eeg_driver = "bluetooth"
 
-#  Import modified pycryptodomex AES ciphers.
-# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-from cyCrypto.Cipher import AES
-from cyCrypto.Random import get_random_bytes
-from cyCrypto.Util.Padding import pad
+#  Import AES ciphers (pycryptodomex preferred, cyCrypto fallback).
+# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+try:
+    from Cryptodome.Cipher import AES
+    from Cryptodome.Random import get_random_bytes
+    from Cryptodome.Util.Padding import pad
+except ImportError:
+    from cyCrypto.Cipher import AES
+    from cyCrypto.Random import get_random_bytes
+    from cyCrypto.Util.Padding import pad
 
 tasks = queue.Queue()
 encrypted_data = bytearray()
 
-#  Bluetooth LE. Data Structure Function.
-# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-class BTH_LE_GATT_CHARACTERISTIC_VALUE(Structure):
-        global _CB_FUNC_
-        _fields_ = [
-            ("DataSize", c_ulong),
-            ("Data", c_ubyte * 20)] 
+#  Bluetooth LE. Data Structure Function (Windows DLL only).
+# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+if _platform.system() == 'Windows':
+    class BTH_LE_GATT_CHARACTERISTIC_VALUE(Structure):
+            global _CB_FUNC_
+            _fields_ = [
+                ("DataSize", c_ulong),
+                ("Data", c_ubyte * 20)]
 
-_CB_FUNC_ = CFUNCTYPE(None, BTH_LE_GATT_CHARACTERISTIC_VALUE)            
+    _CB_FUNC_ = CFUNCTYPE(None, BTH_LE_GATT_CHARACTERISTIC_VALUE)            
 
 
 #  ControllerIO(). I/O threaded bridge to browser (for CyWebSocket.py and eeg.py)
@@ -313,7 +346,7 @@ class ControllerIO():
                 
                 mirror.text("[Start] Recording to File: " + self.recordFile + " \r\n")
                 try:
-                    self.cyFile = open(cyPath + "\\EEG-Logs\\" + self.recordFile + ".csv", "w+" ,newline='')
+                    self.cyFile = open(os.path.join(cyPath, "EEG-Logs", self.recordFile + ".csv"), "w+" ,newline='')
                     #mirror.text(str(dir(self.f)))
                     csvHeader = ""
                     csvHeader += "title: " + self.recordFile + ", "
@@ -722,43 +755,44 @@ def settings_menu(device, sIO, intf):
                 
             
                     
-def DataCallback(EventOutParameter):
-        global encrypted_data
+#  Windows DLL BLE data callback (only used with EEGBtleLib).
+# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+if _platform.system() == 'Windows':
+    def DataCallback(EventOutParameter):
+            global encrypted_data
 
-        if BTLE_device_name == "":
-            return
+            if BTLE_device_name == "":
+                return
 
-        try:
-            data_bin = EventOutParameter.Data
-        except Exception as e: 
-            mirror.text(" Bluetooth Error: " + str(e))
-            return
+            try:
+                data_bin = EventOutParameter.Data
+            except Exception as e:
+                mirror.text(" Bluetooth Error: " + str(e))
+                return
 
-        if data_bin == "":
-            return
+            if data_bin == "":
+                return
 
-        if BTLE_device_name == "Insight":
-            tasks.put(bytearray(data_bin))
-            return
+            if BTLE_device_name == "Insight":
+                tasks.put(bytearray(data_bin))
+                return
 
-        if len(data_bin) < 18:
-            if 'encrypted_data' in locals():
-                del encrypted_data
-            return
+            if len(data_bin) < 18:
+                if 'encrypted_data' in locals():
+                    del encrypted_data
+                return
 
-        
+            if data_bin[1] == 1:
+                if 'encrypted_data' in locals():
+                    del encrypted_data
+                encrypted_data = bytearray(data_bin[2:18])
 
-        if data_bin[1] == 1:
-            if 'encrypted_data' in locals():
-                del encrypted_data
-            encrypted_data = bytearray(data_bin[2:18])
-        
-        if data_bin[1] == 2:
-            if 'encrypted_data' in globals():
-                if len(encrypted_data)  < 16:
-                    return
-                encrypted_data = encrypted_data + bytearray(data_bin[2:18])
-                tasks.put(encrypted_data)
+            if data_bin[1] == 2:
+                if 'encrypted_data' in globals():
+                    if len(encrypted_data)  < 16:
+                        return
+                    encrypted_data = encrypted_data + bytearray(data_bin[2:18])
+                    tasks.put(encrypted_data)
 
 class EEG(object):
 
@@ -961,74 +995,134 @@ class EEG(object):
         #  Bluetooth LE
         # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
         if eeg_driver == "bluetooth":
-            
+
             DEVICE_UUID = "{81072f40-9f3d-11e3-a9dc-0002a5d5c51b}"
             DATA_UUID   = "{81072f41-9f3d-11e3-a9dc-0002a5d5c51b}"
             MEMS_UUID   = "{81072f42-9f3d-11e3-a9dc-0002a5d5c51b}"
 
-            eegDLL.get_bluetooth_id.restype     =  c_wchar_p  # Result   type: C-style character pointer. 
-
-            eegDLL.btle_init.argtypes           = [c_wchar_p] # Argument type: C-style character pointer.    
-            eegDLL.btle_init.restype            =  c_void_p   # Argument type: C-style pointer.
-
-            eegDLL.set_callback_func.argtypes   = [c_void_p]  # Pointer for callback function.
-            eegDLL.set_callback_func.restype    =  c_void_p   # Pointer for device handle.
-
-            eegDLL.run_data_collection.argtypes = [ c_void_p, POINTER(c_wchar_p * 2) ] # Pointer, Pointer to UUID array.
-            eegDLL.run_data_collection.restype  =   c_void_p                           # Pointer.
+            # bleak UUIDs (without curly braces)
+            DATA_UUID_BARE = "81072f41-9f3d-11e3-a9dc-0002a5d5c51b"
+            MEMS_UUID_BARE = "81072f42-9f3d-11e3-a9dc-0002a5d5c51b"
 
             BT_manualkey = globals()['BT_manualkey']
-            
-            uuid_list = [str(DATA_UUID), str(MEMS_UUID)]
-            uuid_clist = (c_wchar_p * len(uuid_list))()
-            uuid_clist[:] = uuid_list
 
-            try:
-                global _CB_FUNC_
-                global cb
-                
-                self.device = eegDLL.btle_init(DEVICE_UUID) # Open.
-                cb = _CB_FUNC_(DataCallback)                    # Set Handler.
-                eegDLL.set_callback_func(cb)             
-                #mirror.text("> Searching for Bluetooth Device . . .")
-                useDevice = ""
-                while useDevice != "Y":
-                    getBTname = eegDLL.get_bluetooth_id()
-                    
-                    time.sleep(1)
-                    BTid = str(c_wchar_p(getBTname).value)
-                    
-                    if "EPOC" in BTid or "Insight" in BTid: 
-                        mirror.text("\r\n> Found Bluetooth Device: [" + BTid  + "] \r\n")
-                        if "confirm" in config:
-                            useDevice = input(" Use this device? [Y]es? ").upper()
+            if _platform.system() != 'Windows':
+                # ── macOS / Linux: bleak backend ──
+                _ble = globals().get('_ble_backend')
+                if _ble is None:
+                    mirror.text("> BLE backend not initialized.")
+                    return
+
+                try:
+                    mirror.text("> Scanning for BLE device . . .")
+                    name_filter = "Insight" if model in (3, 4) else "EPOC"
+                    dev_type, hex_key = _ble.scan_for_device(name_filter, BT_manualkey, timeout=15.0)
+
+                    mirror.text("\r\n> Found Bluetooth Device: [" + dev_type + " " + hex_key + "] \r\n")
+
+                    if "confirm" in config:
+                        useDevice = input(" Use this device? [Y]es? ").upper()
+                        if useDevice != "Y":
+                            return
+
+                    BT_key = hex_key
+                    BTLE_device_name = dev_type
+                    self.serial_number = bytes(("\x00" * 12), 'utf-8') + bytearray.fromhex(
+                        str(BT_key[6:8] + BT_key[4:6] + BT_key[2:4] + BT_key[0:2])
+                    )
+
+                    mirror.text("> Connecting . . .")
+                    _ble.connect(timeout=15.0)
+                    mirror.text("> Connected. Subscribing to notifications . . .")
+
+                    # Subscribe to DATA and MEMS characteristics — data goes into tasks queue
+                    def _ble_data_callback(data):
+                        global BTLE_device_name
+                        if BTLE_device_name == "":
+                            return
+                        if BTLE_device_name == "Insight":
+                            tasks.put(bytearray(data))
                         else:
-                            useDevice = "Y"
-                        
-                        if useDevice == "Y":
-                            BTid = BTid.replace("(","")
-                            BTid = BTid.replace(")","")
-                            BT_key = BTid.split(" ")
-                            BTLE_device_name = BT_key[0]
-                            BT_key = BT_key[1]
-                            if BT_manualkey != "AUTO-DETECT" and BT_manualkey != BT_key:
-                                useDevice = ""
-                                continue
-                            
-                            self.serial_number = bytes(("\x00" * 12),'utf-8') + bytearray.fromhex(str(BT_key[6:8] + BT_key[4:6] + BT_key[2:4] + BT_key[0:2]))
-                    
-                
-                BT_Run = eegDLL.run_data_collection(self.device, uuid_clist)
+                            # EPOC+ BLE: reassemble two-part packets
+                            global encrypted_data
+                            if len(data) < 18:
+                                encrypted_data = bytearray()
+                                return
+                            if data[1] == 1:
+                                encrypted_data = bytearray(data[2:18])
+                            if data[1] == 2:
+                                if len(encrypted_data) >= 16:
+                                    encrypted_data = encrypted_data + bytearray(data[2:18])
+                                    tasks.put(encrypted_data)
 
-                devicesUsed +=1
+                    _ble.subscribe_notifications(DATA_UUID_BARE, _ble_data_callback)
+                    _ble.subscribe_notifications(MEMS_UUID_BARE, _ble_data_callback)
 
-                self.product_name = "EEG Signals"
-        
-            except Exception as e:
-                mirror.text("> Error Initializing Bluetooth. ")
-                mirror.text(" Bluetooth Setup() Error:" + str(e))
-                return
-                os._exit(0)
+                    self.device = _ble  # store backend as device handle
+                    devicesUsed += 1
+                    self.product_name = "EEG Signals"
+
+                except Exception as e:
+                    mirror.text("> Error Initializing Bluetooth (bleak). ")
+                    mirror.text(" Bluetooth Setup() Error: " + str(e))
+                    return
+
+            else:
+                # ── Windows: EEGBtleLib DLL ──
+                eegDLL.get_bluetooth_id.restype     =  c_wchar_p
+                eegDLL.btle_init.argtypes           = [c_wchar_p]
+                eegDLL.btle_init.restype            =  c_void_p
+                eegDLL.set_callback_func.argtypes   = [c_void_p]
+                eegDLL.set_callback_func.restype    =  c_void_p
+                eegDLL.run_data_collection.argtypes = [ c_void_p, POINTER(c_wchar_p * 2) ]
+                eegDLL.run_data_collection.restype  =   c_void_p
+
+                uuid_list = [str(DATA_UUID), str(MEMS_UUID)]
+                uuid_clist = (c_wchar_p * len(uuid_list))()
+                uuid_clist[:] = uuid_list
+
+                try:
+                    global _CB_FUNC_
+                    global cb
+
+                    self.device = eegDLL.btle_init(DEVICE_UUID)
+                    cb = _CB_FUNC_(DataCallback)
+                    eegDLL.set_callback_func(cb)
+                    useDevice = ""
+                    while useDevice != "Y":
+                        getBTname = eegDLL.get_bluetooth_id()
+
+                        time.sleep(1)
+                        BTid = str(c_wchar_p(getBTname).value)
+
+                        if "EPOC" in BTid or "Insight" in BTid:
+                            mirror.text("\r\n> Found Bluetooth Device: [" + BTid  + "] \r\n")
+                            if "confirm" in config:
+                                useDevice = input(" Use this device? [Y]es? ").upper()
+                            else:
+                                useDevice = "Y"
+
+                            if useDevice == "Y":
+                                BTid = BTid.replace("(","")
+                                BTid = BTid.replace(")","")
+                                BT_key = BTid.split(" ")
+                                BTLE_device_name = BT_key[0]
+                                BT_key = BT_key[1]
+                                if BT_manualkey != "AUTO-DETECT" and BT_manualkey != BT_key:
+                                    useDevice = ""
+                                    continue
+
+                                self.serial_number = bytes(("\x00" * 12),'utf-8') + bytearray.fromhex(str(BT_key[6:8] + BT_key[4:6] + BT_key[2:4] + BT_key[0:2]))
+
+                    BT_Run = eegDLL.run_data_collection(self.device, uuid_clist)
+
+                    devicesUsed +=1
+                    self.product_name = "EEG Signals"
+
+                except Exception as e:
+                    mirror.text("> Error Initializing Bluetooth. ")
+                    mirror.text(" Bluetooth Setup() Error:" + str(e))
+                    return
             
         
         #  PyWinUSB.
@@ -1428,10 +1522,26 @@ class EEG(object):
                 if eeg_driver == "pyusb":
                     tasks.put(encrypted_blank_cipher[1:])
                 
+            if eeg_driver == "bluetooth" and self.blankdata == False:
+                # BLE: data arrives via callbacks into tasks queue.
+                # Check connection health on macOS/Linux (bleak backend).
+                if _platform.system() != 'Windows':
+                    _ble = globals().get('_ble_backend')
+                    if _ble and not _ble.is_connected():
+                        mirror.text("\r\n ░░░ BLE Device Disconnected ░░░ \r\n")
+                        if cyIO.isRecording() == True:
+                            cyIO.stopRecord()
+                        cyIO.setInfo("status","False")
+                        self.running = False
+                        continue
+                # Avoid busy-wait when queue is empty
+                if tasks.empty():
+                    time.sleep(0.005)
+
             if eeg_driver == "pyusb" and self.blankdata == False:
-                
+
                 try:
-                    
+
                     #task = self.device.read(0x00, 32, 100)
                     #mirror.text(str(list(task))
                     # 0x60

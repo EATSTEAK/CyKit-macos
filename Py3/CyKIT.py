@@ -31,8 +31,8 @@ def mirror(custom_string):
 
 if arg_count == 1 or arg_count > 5 or sys.argv[1] == "help" or sys.argv[1] == "--help" or sys.argv[1] == "/?":
     mirror("\r\n")
-    mirror(" (Version: CyKIT 3.0:2018.Dec.26) for Python 3.x on (Win32 or Win64) \r\n")
-    mirror("\r\n Usage:  Python.exe .\\CyKIT.py <IP> <Port> <Model#(1-6)> [config] \r\n\r\n")
+    mirror(" (Version: CyKIT 3.1) for Python 3.x on (Windows / macOS / Linux) \r\n")
+    mirror("\r\n Usage:  python CyKIT.py <IP> <Port> <Model#(1-6)> [config] \r\n\r\n")
     mirror(" Must be launched from the CyKIT directory, do not use py launcher.\r\n")
     mirror(" " + "═" * 100 + "\r\n")
     mirror(" <IP> <PORT> for CyKIT to listen on. \r\n")
@@ -78,14 +78,14 @@ if arg_count == 1 or arg_count > 5 or sys.argv[1] == "help" or sys.argv[1] == "-
     mirror("  'noweb'               Displays data. (without requiring a TCP connection.)\r\n\r\n")
     mirror("  'bluetooth'  Attempt to AUTO-DETECT an already paired bluetooth device.\r\n\r\n")
     mirror("  'bluetooth=xxxxxxxx'  Connect to an already paired bluetooth device, use the hex digit found in the devices pairing name.\r\n\r\n")
-    mirror("                         The pairing name can easily be found in Windows Bluetooth settings.\r\n\r\n")
+    mirror("                         The pairing name can be found in OS Bluetooth settings.\r\n\r\n")
     mirror("   Join these options (in any order), using a + separator. \r\n")
     mirror("   (e.g  info+confirm ) \r\n\r\n")
     mirror(" " + "═" * 100 + "\r\n")
     mirror("  Example Usage: \r\n")
-    mirror("  Python.exe .\\CyKIT.py 127.0.0.1 54123 1 info+confirm \r\n\r\n")
+    mirror("  python CyKIT.py 127.0.0.1 54123 1 info+confirm \r\n\r\n")
     mirror("  Example Usage: \r\n")
-    mirror("  Python.exe .\\CyKIT.py 127.0.0.1 5555 6 openvibe+generic+nocounter+noheader+nobattery+ovdelay:100+integer+ovsamples:004 \r\n\r\n")
+    mirror("  python CyKIT.py 127.0.0.1 5555 6 openvibe+generic+nocounter+noheader+nobattery+ovdelay:100+integer+ovsamples:004 \r\n\r\n")
     mirror(" " + "═" * 100 + "\r\n")
     sys.argv = [sys.argv[0], "127.0.0.1", "54123", "1", ""]
     

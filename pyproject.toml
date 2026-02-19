@@ -1,0 +1,12 @@
+[project]
+name = "cykit"
+version = "3.1.0"
+description = "Emotiv EEG headset data acquisition (cross-platform)"
+requires-python = ">=3.10"
+dependencies = [
+    "pycryptodomex>=3.19.0",
+    "bleak>=0.21.0",
+]
+
+[project.scripts]
+cykit = "Py3.CyKIT:main"
