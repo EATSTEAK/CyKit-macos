@@ -11,6 +11,11 @@ class BLEBackend(abc.ABC):
     """Abstract base class for platform-specific BLE backends."""
 
     @abc.abstractmethod
+    def discover_devices(self, timeout=10.0):
+        """Return nearby CyKit-compatible BLE devices as dictionaries."""
+        ...
+
+    @abc.abstractmethod
     def scan_for_device(self, name_filter, manual_key="AUTO-DETECT", timeout=10.0):
         """Scan for a BLE device whose name contains *name_filter*.
 

@@ -41,8 +41,32 @@ class mirror():
         except OSError as exp:
             return
 
+class _ClientIOAdapter:
+    def __init__(self, client):
+        self.client = client
+        self.io = client.io
+
+    def setInfo(self, name, value):
+        return self.io.setInfo(name, value)
+
+    def getInfo(self, name):
+        return self.io.getInfo(name)
+
+    def onGeneric(self, uid):
+        return self.io.onGeneric(uid)
+
+    def onConnect(self, uid):
+        return self.io.onConnect(uid)
+
+    def onClose(self, location):
+        return self.io.onClose(location)
+
+    def onData(self, uid, value):
+        return self.client.handle_legacy_command(value)
+
+
 class socketIO():
-    
+
     def __init__(self, port, uid, ioHandler):
         self.time_delay = .001
         self.openvibe = False
@@ -51,7 +75,8 @@ class socketIO():
         self.con = None
         self.isHandleShake = False
         self.uid = uid
-        self.io = ioHandler
+        self.client = ioHandler if hasattr(ioHandler, "handle_legacy_command") else None
+        self.io = _ClientIOAdapter(ioHandler) if self.client is not None else ioHandler
         self.signKey = "ADS#@!D"
         self.online = True
         self.generic = False
@@ -64,7 +89,7 @@ class socketIO():
         self.verbose = False
         self.io.setInfo("generic","False")
         self.verbose = eval(self.io.getInfo("verbose"))
-        
+
         if uid == 0:
             self.io.setInfo("generic","True")
             self.generic = True
@@ -298,6 +323,7 @@ class socketIO():
                 mirror.text("CLIENT >>> " + (value).replace(':::','.'))
         except:
             self.con.close()
+            return
         hashStr = hashlib.new("md5",(str(uid)+self.signKey).encode('utf-8')).hexdigest()
         if hashStr!=sign:
             mirror.text(" CyWebSocket.py onData() [ Browser Hash Invalid ]")

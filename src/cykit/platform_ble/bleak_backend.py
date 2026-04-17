@@ -60,34 +60,59 @@ class BleakBLEBackend(BLEBackend):
     #  BLEBackend interface
     # ------------------------------------------------------------------
 
+    def discover_devices(self, timeout=10.0):
+        return self._run_coroutine(self._async_discover(timeout), timeout=timeout + 5)
+
     def scan_for_device(self, name_filter, manual_key="AUTO-DETECT", timeout=10.0):
         return self._run_coroutine(
             self._async_scan(name_filter, manual_key, timeout),
             timeout=timeout + 5,
         )
 
-    async def _async_scan(self, name_filter, manual_key, timeout):
+    async def _async_discover(self, timeout):
         scanner = bleak.BleakScanner()
         devices = await scanner.discover(timeout=timeout)
+        results = []
+        for device in devices:
+            if not device.name:
+                continue
+            raw_name = device.name.replace("(", " ").replace(")", " ").strip()
+            parts = raw_name.split()
+            device_type = parts[0] if parts else raw_name
+            device_key = parts[1] if len(parts) > 1 and len(parts[1]) == 8 else None
+            if device_type not in {"Insight", "EPOC", "EPOC+"}:
+                continue
+            results.append(
+                {
+                    "name": device.name,
+                    "device_type": device_type,
+                    "device_key": device_key,
+                    "address": getattr(device, "address", None),
+                    "rssi": getattr(device, "rssi", None),
+                }
+            )
+        return results
 
-        for d in devices:
-            if d.name and name_filter in d.name:
-                # Parse name: e.g. "Insight AABBCCDD" or "EPOC+(AABBCCDD)"
-                raw_name = d.name.replace("(", " ").replace(")", " ").strip()
-                parts = raw_name.split()
-                if len(parts) < 2:
-                    continue
+    async def _async_scan(self, name_filter, manual_key, timeout):
+        devices = await self._async_discover(timeout)
 
-                dev_type = parts[0]   # "Insight" / "EPOC+" / "EPOC"
-                hex_key  = parts[1]   # 8-hex-digit key
-
-                if manual_key != "AUTO-DETECT" and hex_key != manual_key:
-                    continue
-
-                self._device = d
-                self._device_name = dev_type
-                self._hex_key = hex_key
-                return (dev_type, hex_key)
+        for device in devices:
+            device_name = device["name"]
+            dev_type = device["device_type"]
+            hex_key = device["device_key"]
+            if name_filter not in device_name or hex_key is None:
+                continue
+            if manual_key != "AUTO-DETECT" and hex_key != manual_key:
+                continue
+            scanner = bleak.BleakScanner()
+            discovered = await scanner.discover(timeout=0.1)
+            for candidate in discovered:
+                if candidate.name == device_name:
+                    self._device = candidate
+                    break
+            self._device_name = dev_type
+            self._hex_key = hex_key
+            return (dev_type, hex_key)
 
         raise RuntimeError(
             f"No BLE device with '{name_filter}' in name found (timeout={timeout}s)"

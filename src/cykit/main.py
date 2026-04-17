@@ -10,15 +10,13 @@
 
 import os
 import sys
-import socket
-import select
-import struct
-from cykit import eeg
-from cykit import websocket
 import threading
 import time
 import traceback
-import inspect
+
+from cykit.client import CyKitClient
+from cykit.models import ConnectionOptions, Model, OutputOptions, StreamOptions, Transport
+from cykit import websocket
 
 
 def mirror(custom_string):
@@ -29,129 +27,101 @@ def mirror(custom_string):
             return
 
 
-def _run(CyINIT):
+def _build_client(model: int, parameters: str) -> CyKitClient:
+    transport = Transport.BLUETOOTH if "bluetooth" in parameters else Transport.USB
+    device_key = None
+    if "bluetooth=" in parameters:
+        split_bt = parameters.split("bluetooth=")
+        if len(split_bt) > 1:
+            device_key = split_bt[1].split("+")[0]
 
+    stream = StreamOptions(
+        data_mode=(2 if "gyromode" in parameters else 0 if "allmode" in parameters else 1),
+        include_header="noheader" not in parameters,
+        baseline="baseline" in parameters,
+        filter_enabled="filter" in parameters,
+        openvibe="openvibe" in parameters,
+    )
+    output = OutputOptions(
+        format=int(parameters.split("format-")[1][:1]) if "format-" in parameters else 0,
+        integer_values="integer" in parameters,
+        no_counter="nocounter" in parameters,
+        no_battery="nobattery" in parameters,
+        blank_data="blankdata" in parameters,
+        blank_csv="blankcsv" in parameters,
+        verbose="verbose" in parameters,
+        output_data="outputdata" in parameters,
+        output_raw="outputraw" in parameters,
+    )
+    connection = ConnectionOptions(
+        transport=transport,
+        device_key=device_key,
+        confirm_device="confirm" in parameters,
+    )
+    return CyKitClient(Model(model), connection=connection, stream=stream, output=output)
+
+
+def _run(CyINIT):
     HOST = str(sys.argv[1])
     PORT = int(sys.argv[2])
     MODEL = int(sys.argv[3])
-    check_connection = None
     parameters = str(sys.argv[4]).lower()
+    noweb = "noweb" in parameters
 
-    #  Stage 1.
-    # ¯¯¯¯¯¯¯¯¯¯¯
-    #  Acquire I/O Object.
-    # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-    cy_IO = eeg.ControllerIO()
-
-    cy_IO.setInfo("ioObject", cy_IO)
-    cy_IO.setInfo("config", parameters)
-
-    if "verbose" in parameters:
-        cy_IO.setInfo("verbose","True")
-    else:
-        cy_IO.setInfo("verbose","False")
-
-    if "noweb" in parameters:
-        noweb = True
-        cy_IO.setInfo("noweb","True")
-        cy_IO.setInfo("status","True")
-    else:
-        noweb = False
-        cy_IO.setInfo("noweb","False")
-
-    if "noheader" in parameters:
-        cy_IO.setInfo("noheader","True")
-
-    if "openvibe" in parameters:
-        cy_IO.setInfo("openvibe","True")
-
-
-    headset = eeg.EEG(MODEL, cy_IO, parameters)
-
-    while str(cy_IO.getInfo("DeviceObject")) == "0":
-        time.sleep(.001)
-        continue
+    client = _build_client(MODEL, parameters)
+    client.connect()
 
     if "bluetooth" in parameters:
-            mirror("> [Bluetooth] Pairing Device . . .")
-    else:
-        if "noweb" not in parameters:
-            mirror("> Listening on " + HOST + " : " + str(PORT))
+        mirror("> [Bluetooth] Pairing Device . . .")
+    elif not noweb:
+        mirror("> Listening on " + HOST + " : " + str(PORT))
 
     mirror("> Trying Key Model #: " + str(MODEL))
 
-    if "generic" in parameters:
-        ioTHREAD = websocket.socketIO(PORT, 0, cy_IO)
-    else:
-        ioTHREAD = websocket.socketIO(PORT, 1, cy_IO)
+    ioTHREAD = None
+    if not noweb:
+        ioTHREAD = websocket.socketIO(PORT, 0 if "generic" in parameters else 1, client)
+        client.attach_server(ioTHREAD)
+        time.sleep(1)
+        ioTHREAD.Connect()
+        ioTHREAD.start()
 
-    cy_IO.setServer(ioTHREAD)
-    time.sleep(1)
-    check_connection = ioTHREAD.Connect()
-    ioTHREAD.start()
+    client.start_background_stream()
 
-    while eval(cy_IO.getInfo("status")) != True:
-        time.sleep(.001)
-        continue
-
-    headset.start()
-
-    if eval(cy_IO.getInfo("openvibe")) == True:
+    if client.io is not None and eval(client.io.getInfo("openvibe")) == True:
         time.sleep(3)
 
     CyINIT = 3
-
     while CyINIT > 2:
-
         CyINIT += 1
         time.sleep(.001)
 
-        if (CyINIT % 10) == 0:
+        if (CyINIT % 10) != 0:
+            continue
 
+        check_threads = 0
+        t_array = str(list(map(lambda x: x.name, threading.enumerate())))
+        if 'ioThread' in t_array:
+            check_threads += 1
+        if 'eegThread' in t_array:
+            check_threads += 1
 
-            check_threads = 0
-
-            t_array = str(list(map(lambda x: x.name, threading.enumerate())))
-
-            if 'ioThread' in t_array:
-                check_threads += 1
-
-            if 'eegThread' in t_array:
-                check_threads += 1
-
-            if eval(cy_IO.getInfo("openvibe")) == True:
-                if check_threads == 0:
-                    ioTHREAD.onClose("CyKIT._run() 2")
-                    mirror("\r\n*** Reseting . . .")
-                    CyINIT = 1
-                    _run(1)
-                continue
-
-            if check_threads < (1 if noweb == True else 2):
-
-                threadMax = 2
-                totalTries = 0
-                while threadMax > 1 and totalTries < 2:
-                    totalTries += 1
-                    time.sleep(0)
-                    threadMax = 0
-                    for t in threading.enumerate():
-                        if "eegThread" in t.name:
-                            cy_IO.setInfo("status","False")
-                        if "ioThread" in t.name:
-                            websocket.socketIO.stopThread(ioTHREAD)
-
-                        if "Thread-" in t.name:
-                            threadMax += 1
-                            try:
-                                t.abort()
-                            except:
-                                continue
-                t_array = str(list(map(lambda x: x.name, threading.enumerate())))
-                ioTHREAD.onClose("CyKIT._run() 1")
-                mirror("*** Reseting . . .")
+        if client.io is not None and eval(client.io.getInfo("openvibe")) == True:
+            if check_threads == 0 and ioTHREAD is not None:
+                ioTHREAD.onClose("CyKIT._run() 2")
+                mirror("\r\n*** Reseting . . .")
+                client.close()
                 CyINIT = 1
                 _run(1)
+            continue
+
+        if check_threads < (1 if noweb else 2):
+            if ioTHREAD is not None:
+                ioTHREAD.onClose("CyKIT._run() 1")
+            mirror("*** Reseting . . .")
+            client.close()
+            CyINIT = 1
+            _run(1)
 
 
 def cli():

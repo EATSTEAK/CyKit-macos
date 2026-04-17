@@ -52,47 +52,46 @@ class mirror():
         except OSError as exp:
             return
 
-parameters = len(sys.argv)
-if parameters > 4:
-    eeg_config = sys.argv[4]
-else:
-    eeg_config = ""
-
-if parameters > 4 and "verbose" in eeg_config:
-    verbose = True
-else:
-    verbose = False
-
-if parameters > 4 and "path" in eeg_config:
-    mirror.text("[Python Search Path] " + str(sys.path))
+eeg_config = ""
+verbose = False
+BT_manualkey = "AUTO-DETECT"
+_ble_backend = None
+eeg_driver = "pyusb"
 
 
-#  Setup [ pyUSB (Default) / bluetooth ]
-# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-if parameters > 4 and "bluetooth" in eeg_config:
-    # BLE mode — skip USB driver imports entirely.
-    eeg_driver = "bluetooth_pending"
-else:
-    if verbose == True:
-        mirror.text("> Importing (pyusb)")
-    eeg_driver = "pyusb"
-    import usb.core
-    import usb.util
-    import usb.backend.libusb1
+def configure_runtime(config=""):
+    global eeg_config
+    global verbose
+    global BT_manualkey
+    global _ble_backend
+    global eeg_driver
 
-if parameters > 4 and "bluetooth" in eeg_config:
-
+    eeg_config = str(config or "")
+    verbose = "verbose" in eeg_config
     BT_manualkey = "AUTO-DETECT"
+    _ble_backend = None
+    eeg_driver = "pyusb"
+
+    if "path" in eeg_config:
+        mirror.text("[Python Search Path] " + str(sys.path))
+
+    if "bluetooth" not in eeg_config:
+        if verbose == True:
+            mirror.text("> Importing (pyusb)")
+        import usb.core
+        import usb.util
+        import usb.backend.libusb1
+        return
+
+    eeg_driver = "bluetooth_pending"
 
     if "bluetooth=" in eeg_config:
         split_bt = str(eeg_config).split("bluetooth=")
-
         if len(split_bt) > 1:
             if "+" in split_bt[1]:
                 BT_manualkey = str(split_bt[1]).split("+")[0]
             else:
                 BT_manualkey = split_bt[1]
-
             if len(BT_manualkey) != 8:
                 mirror.text("> Incorrect Key Length. Bluetooth key is 8 hex digits long. ")
                 mirror.text("> (Locate in the device name, e.g. Insight(AABBCCDD), in OS Bluetooth settings.)")
@@ -101,22 +100,18 @@ if parameters > 4 and "bluetooth" in eeg_config:
 
     mirror.text("\r\n> Trying Bluetooth Key >>> " + str(BT_manualkey))
 
-    #  BLE initialization (bleak backend)
-    # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-    _ble_backend = None
-
     try:
         from cykit.platform_ble import get_ble_backend
         _ble_backend = get_ble_backend()
         if _ble_backend is None:
-            mirror.text("> BLE backend not available for this platform.")
-            os._exit(0)
+            raise ImportError("BLE backend not available for this platform")
     except ImportError as e:
-        mirror.text("> Failed to load BLE backend: " + str(e))
-        mirror.text("> Install bleak: pip install bleak")
-        os._exit(0)
+        raise ImportError("Failed to load BLE backend. Install bleak: pip install bleak") from e
 
     eeg_driver = "bluetooth"
+
+
+configure_runtime(sys.argv[4] if len(sys.argv) > 4 else "")
 
 
 #  ControllerIO(). I/O threaded bridge to browser (for CyWebSocket.py and eeg.py)
