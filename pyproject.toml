@@ -16,5 +16,17 @@ dependencies = [
     "pyusb>=1.2.0",
 ]
 
+[project.optional-dependencies]
+docs = [
+    "sphinx>=8.0.0",
+    "furo>=2024.8.6",
+]
+test = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.scripts]
 cykit = "cykit.main:cli"
