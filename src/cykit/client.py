@@ -46,7 +46,7 @@ class CyKitClient:
         self._eeg: eeg.EEG | None = None
         self._io: eeg.ControllerIO | None = None
         self._cipher = None
-        self._delimiter = ", "
+        self._delimiter = stream.delimiter
         self._recording_path: Path | None = None
 
     def __enter__(self) -> "CyKitClient":

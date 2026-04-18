@@ -225,7 +225,7 @@ def cli():
         mirror(traceback.format_exc())
 
         mirror(" ) WARNING_) CyKIT2._run E1: " + str(e))
-        mirror("Error # " + str(list(OSError)))
+        mirror("Error # " + str(e))
         mirror("> Device Time Out or Disconnect . . .  [ Reconnect to Server. ]")
         _run(1)
 
