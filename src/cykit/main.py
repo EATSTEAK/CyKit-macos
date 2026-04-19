@@ -1,234 +1,526 @@
-# -*- coding: utf8 -*-
-#
-#  CyKIT   2021.Nov.10
-# ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-#  main.py (formerly CyKIT.py)
-#  Written by Warren
-#
-#  Launcher to initiate EEG setup.
-#  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
+from __future__ import annotations
 
-import os
+import json
 import sys
 import threading
 import time
 import traceback
+from dataclasses import dataclass
+from typing import Annotated
 
-from cykit.client import CyKitClient
-from cykit.models import ConnectionOptions, Model, OutputOptions, StreamOptions, Transport
+import typer
+
 from cykit import websocket
+from cykit._helpers import normalize_model
+from cykit.client import CyKitClient
+from cykit.discovery import discover as discover_devices
+from cykit.exceptions import ConnectionError
+from cykit.models import (
+    ConnectionOptions,
+    DeviceInfo,
+    OutputOptions,
+    StreamOptions,
+    Transport,
+)
+
+app = typer.Typer(add_completion=False, help="CyKit CLI")
+
+HELP_TEXT = """
+CyKIT 4.0
+
+Legacy usage:
+  cykit <IP> <Port> <Model#(1-7)> [config]
+
+Modern usage:
+  cykit run <IP> <Port> <Model#(1-7)> [OPTIONS]
+
+Legacy config tokens:
+  info, confirm, verbose, nocounter, noheader, format-0, format-1, format-3,
+  outputdata, outputraw, blankdata, blankcsv, generic, openvibe, ovdelay:NNN,
+  ovsamples:NNN, integer, baseline, path, filter, allmode, eegmode, gyromode,
+  noweb, bluetooth, bluetooth=XXXXXXXX
+""".strip()
 
 
-def mirror(custom_string):
-        try:
-            print(str(custom_string))
-            return
-        except OSError as exp:
-            return
+@dataclass
+class RunConfig:
+    host: str
+    port: int
+    model: int
+    parameters: str = ""
+
+
+def mirror(custom_string: object) -> None:
+    try:
+        print(str(custom_string))
+    except OSError:
+        return
+
+
+def _token_list(parameters: str) -> list[str]:
+    return [token.strip() for token in str(parameters or "").strip().split("+") if token.strip()]
+
+
+def _token_set(parameters: str) -> set[str]:
+    return {token.lower() for token in _token_list(parameters)}
+
+
+def _extract_prefixed_value(parameters: str, prefix: str) -> str | None:
+    normalized_prefix = prefix.lower()
+    for token in _token_list(parameters):
+        if token.lower().startswith(normalized_prefix):
+            return token[len(prefix) :]
+    return None
+
+
+def _normalize_bluetooth_key(device_key: str | None) -> str | None:
+    if device_key is None:
+        return None
+    normalized = device_key.strip()
+    return normalized.upper() or None
+
+
+def parse_legacy_config(parameters: str) -> tuple[ConnectionOptions, StreamOptions, OutputOptions]:
+    tokens = _token_set(parameters)
+    bluetooth_key = _normalize_bluetooth_key(_extract_prefixed_value(parameters, "bluetooth="))
+    format_value = _extract_prefixed_value(parameters, "format-")
+    ovdelay_value = _extract_prefixed_value(parameters, "ovdelay:")
+    ovsamples_value = _extract_prefixed_value(parameters, "ovsamples:")
+
+    stream = StreamOptions(
+        data_mode=(2 if "gyromode" in tokens else 0 if "allmode" in tokens else 1),
+        include_header="noheader" not in tokens,
+        baseline="baseline" in tokens,
+        filter_enabled="filter" in tokens,
+        openvibe="openvibe" in tokens,
+        openvibe_delay=int(ovdelay_value) if ovdelay_value and ovdelay_value.isdigit() else 100,
+        openvibe_samples=int(ovsamples_value)
+        if ovsamples_value and ovsamples_value.isdigit()
+        else 4,
+    )
+    output = OutputOptions(
+        format=int(format_value) if format_value and format_value.isdigit() else 0,
+        integer_values="integer" in tokens,
+        no_counter="nocounter" in tokens,
+        no_battery="nobattery" in tokens,
+        blank_data="blankdata" in tokens,
+        blank_csv="blankcsv" in tokens,
+        verbose="verbose" in tokens or "info" in tokens,
+        output_data="outputdata" in tokens,
+        output_raw="outputraw" in tokens,
+    )
+    connection = ConnectionOptions(
+        transport=Transport.BLUETOOTH
+        if any(token.startswith("bluetooth") for token in tokens)
+        else Transport.USB,
+        device_key=bluetooth_key,
+        confirm_device="confirm" in tokens,
+    )
+    return connection, stream, output
 
 
 def _build_client(model: int, parameters: str) -> CyKitClient:
-    transport = Transport.BLUETOOTH if "bluetooth" in parameters else Transport.USB
-    device_key = None
-    if "bluetooth=" in parameters:
-        split_bt = parameters.split("bluetooth=")
-        if len(split_bt) > 1:
-            device_key = split_bt[1].split("+")[0]
-
-    stream = StreamOptions(
-        data_mode=(2 if "gyromode" in parameters else 0 if "allmode" in parameters else 1),
-        include_header="noheader" not in parameters,
-        baseline="baseline" in parameters,
-        filter_enabled="filter" in parameters,
-        openvibe="openvibe" in parameters,
-    )
-    output = OutputOptions(
-        format=int(parameters.split("format-")[1][:1]) if "format-" in parameters else 0,
-        integer_values="integer" in parameters,
-        no_counter="nocounter" in parameters,
-        no_battery="nobattery" in parameters,
-        blank_data="blankdata" in parameters,
-        blank_csv="blankcsv" in parameters,
-        verbose="verbose" in parameters,
-        output_data="outputdata" in parameters,
-        output_raw="outputraw" in parameters,
-    )
-    connection = ConnectionOptions(
-        transport=transport,
-        device_key=device_key,
-        confirm_device="confirm" in parameters,
-    )
-    return CyKitClient(Model(model), connection=connection, stream=stream, output=output)
+    connection, stream, output = parse_legacy_config(parameters)
+    return CyKitClient(normalize_model(model), connection=connection, stream=stream, output=output)
 
 
-def _run(CyINIT):
-    HOST = str(sys.argv[1])
-    PORT = int(sys.argv[2])
-    MODEL = int(sys.argv[3])
-    parameters = str(sys.argv[4]).lower()
-    noweb = "noweb" in parameters
+def _info_is_true(io: object | None, name: str) -> bool:
+    if io is None:
+        return False
+    value = io.getInfo(name)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
 
-    client = _build_client(MODEL, parameters)
+
+def _run_once(config: RunConfig) -> bool:
+    tokens = _token_set(config.parameters)
+    noweb = "noweb" in tokens
+
+    client = _build_client(config.model, config.parameters)
     client.connect()
 
-    if "bluetooth" in parameters:
+    if any(token.startswith("bluetooth") for token in tokens):
         mirror("> [Bluetooth] Pairing Device . . .")
     elif not noweb:
-        mirror("> Listening on " + HOST + " : " + str(PORT))
+        mirror("> Listening on " + config.host + " : " + str(config.port))
 
-    mirror("> Trying Key Model #: " + str(MODEL))
+    mirror("> Trying Key Model #: " + str(config.model))
 
-    ioTHREAD = None
-    if not noweb:
-        ioTHREAD = websocket.socketIO(PORT, 0 if "generic" in parameters else 1, client)
-        client.attach_server(ioTHREAD)
-        time.sleep(1)
-        ioTHREAD.Connect()
-        ioTHREAD.start()
-
-    client.start_background_stream()
-
-    if client.io is not None and eval(client.io.getInfo("openvibe")) == True:
-        time.sleep(3)
-
-    CyINIT = 3
-    while CyINIT > 2:
-        CyINIT += 1
-        time.sleep(.001)
-
-        if (CyINIT % 10) != 0:
-            continue
-
-        check_threads = 0
-        t_array = str(list(map(lambda x: x.name, threading.enumerate())))
-        if 'ioThread' in t_array:
-            check_threads += 1
-        if 'eegThread' in t_array:
-            check_threads += 1
-
-        if client.io is not None and eval(client.io.getInfo("openvibe")) == True:
-            if check_threads == 0 and ioTHREAD is not None:
-                ioTHREAD.onClose("CyKIT._run() 2")
-                mirror("\r\n*** Reseting . . .")
-                client.close()
-                CyINIT = 1
-                _run(1)
-            continue
-
-        if check_threads < (1 if noweb else 2):
-            if ioTHREAD is not None:
-                ioTHREAD.onClose("CyKIT._run() 1")
-            mirror("*** Reseting . . .")
-            client.close()
-            CyINIT = 1
-            _run(1)
-
-
-def cli():
-    """Entry point for ``python -m cykit`` and the ``cykit`` console script."""
-
-    arg_count = len(sys.argv)
-
-    if arg_count == 1 or arg_count > 5 or sys.argv[1] == "help" or sys.argv[1] == "--help" or sys.argv[1] == "/?":
-        mirror("\r\n")
-        mirror(" (Version: CyKIT 4.0) for Python 3.x on (Windows / macOS / Linux) \r\n")
-        mirror("\r\n Usage:  cykit <IP> <Port> <Model#(1-7)> [config] \r\n\r\n")
-        mirror(" " + "═" * 100 + "\r\n")
-        mirror(" <IP> <PORT> for CyKIT to listen on. \r\n")
-        mirror(" " + ("═" * 100) + "\r\n")
-        mirror(" <Model#> Choose the decryption type. \r\n")
-        mirror("          1 - Epoc    (Premium  Model)\r\n")
-        mirror("          2 - Epoc    (Consumer Model)\r\n")
-        mirror("          3 - Insight (Premium  Model)\r\n")
-        mirror("          4 - Insight (Consumer Model) \r\n")
-        mirror("          5 - Epoc+   (Premium  Model)\r\n")
-        mirror("          6 - Epoc+   (Consumer Model) [16-bit EPOC+ mode] \r\n\r\n")
-        mirror("          7 - EPOC+   (Consumer Model) [14-bit EPOC  mode] \r\n")
-        mirror(" " + "═" * 100 + "\r\n")
-        mirror(" [config] is optional. \r\n")
-        mirror("  'info'                Prints additional information into console.\r\n\r\n")
-        mirror("  'confirm'             Requests you to confirm a device everytime device is initialized.\r\n\r\n")
-        mirror("  'verbose'             Prints extra information regarding the inner workings of CyKIT.\r\n\r\n")
-        mirror("  'nocounter'           Removes COUNTER and INTERPOLATE from outputs. (Must also use either nogyro or noeeg) \r\n")
-        mirror("                         (nogyro is enabled by default.) This ensures streams are differentiated. \r\n\r\n")
-        mirror("  'noheader'            Removes CyKITv2::: header information. (Required for openvibe) \r\n\r\n")
-        mirror("  'format-0'            (Default) Outputs 14 data channels in float format. ('4201.02564096') \r\n\r\n")
-        mirror("  'format-1'            Outputs the raw data (to be converted by Javascript or other). \r\n\r\n")
-        mirror("  'format-3'            Used only with Insight(USB), selects specific bit ranges to acquire data.\r\n\r\n")
-        mirror("  'outputdata'          Prints the (formatted) data being sent, to the console window.\r\n\r\n")
-        mirror("  'outputraw'           Prints the (encrypted) rjindael data to the console window.\r\n\r\n")
-        mirror("  'blankdata'           Injects a single line of encrypted data into the stream that is \r\n")
-        mirror("                         consistent with a blank EEG signal. Counter will report 0. \r\n\r\n")
-        mirror("  'blancsv'             Adds blank channels for each CSV line, to be used with logging.\r\n\r\n")
-        mirror("  'generic'             Connects to any generic program via TCP. (Can be used with other flags.)\r\n\r\n")
-        mirror("  'openvibe'            Connects to the generic OpenViBE Acquisition Server.\r\n\r\n")
-        mirror("                         must use generic+nocounter+noheader+nobattery Other flags are optional.\r\n")
-        mirror("  'ovdelay'             Stream sending delay. (999 maximum) Works as a multiplier, in the format: ovdelay:001 \r\n\r\n")
-        mirror("  'ovsamples'           Changes openvibe sample rate. Format: ovsamples:001 \r\n\r\n")
-        mirror("  'integer'             Changes format from float to integer. Works with other flags. Including openvibe. \r\n\r\n")
-        mirror("  'baseline'            Averages data and sends the baseline value to socket.\r\n\r\n")
-        mirror("  'path'                Prints the Python paths used to acquire modules.\r\n\r\n")
-        mirror("  'filter'              When used with baseline, subtracts the data value from baseline and sends to sockets.\r\n\r\n")
-        mirror("  'allmode'             Sends Gyro and EEG data packets (Can change during run-time)\r\n\r\n")
-        mirror("  'eegmode'             Sends only EEG packets. (Can change during run-time)\r\n\r\n")
-        mirror("  'gyromode'            Sends only Gyro packet. (Can change during run-time)\r\n\r\n")
-        mirror("  'noweb'               Displays data. (without requiring a TCP connection.)\r\n\r\n")
-        mirror("  'bluetooth'  Attempt to AUTO-DETECT an already paired bluetooth device.\r\n\r\n")
-        mirror("  'bluetooth=xxxxxxxx'  Connect to an already paired bluetooth device, use the hex digit found in the devices pairing name.\r\n\r\n")
-        mirror("                         The pairing name can be found in OS Bluetooth settings.\r\n\r\n")
-        mirror("   Join these options (in any order), using a + separator. \r\n")
-        mirror("   (e.g  info+confirm ) \r\n\r\n")
-        mirror(" " + "═" * 100 + "\r\n")
-        mirror("  Example Usage: \r\n")
-        mirror("  cykit 127.0.0.1 54123 1 info+confirm \r\n\r\n")
-        mirror("  Example Usage: \r\n")
-        mirror("  cykit 127.0.0.1 5555 6 openvibe+generic+nocounter+noheader+nobattery+ovdelay:100+integer+ovsamples:004 \r\n\r\n")
-        mirror(" " + "═" * 100 + "\r\n")
-        sys.argv = [sys.argv[0], "127.0.0.1", "54123", "1", ""]
-
-
-    if arg_count < 5:
-
-        if arg_count == 2:
-            sys.argv = [sys.argv[0], sys.argv[1], "54123", "1", ""]
-        if arg_count == 3:
-            sys.argv = [sys.argv[0], sys.argv[1], sys.argv[2], "1", ""]
-        if arg_count == 4:
-            sys.argv = [sys.argv[0], sys.argv[1], sys.argv[2], sys.argv[3], ""]
-
-    if sys.argv[2].isdigit() == False or int(sys.argv[2]) < 1025 or int(sys.argv[2])> 65535:
-        mirror("Invalid Port #[" + str(sys.argv[2]) + "] (Must be a local port in range: 1025 - 65535)")
-        os._exit(0)
-
-    if sys.argv[3].isdigit() == False:
-        mirror("Invalid Key # [" + str(sys.argv[3]) + "] (Must be a numeric 1 - 9)")
-        os._exit(0)
-
-    if int(sys.argv[3]) < 1 or int(sys.argv[3]) > 9:
-        mirror("Invalid Key # [" + str(sys.argv[2]) + "] (Must be a numeric 1-9)")
-        os._exit(0)
-
+    io_thread = None
     try:
+        if not noweb:
+            io_thread = websocket.socketIO(config.port, 0 if "generic" in tokens else 1, client)
+            client.attach_server(io_thread)
+            time.sleep(1)
+            io_thread.Connect()
+            io_thread.start()
+
+        client.start_background_stream()
+
+        if _info_is_true(client.io, "openvibe"):
+            time.sleep(3)
+
+        cycle = 3
+        while cycle > 2:
+            cycle += 1
+            time.sleep(0.001)
+            if (cycle % 10) != 0:
+                continue
+
+            check_threads = 0
+            names = {thread.name for thread in threading.enumerate()}
+            if "ioThread" in names:
+                check_threads += 1
+            if "eegThread" in names:
+                check_threads += 1
+
+            if _info_is_true(client.io, "openvibe"):
+                if check_threads == 0 and io_thread is not None:
+                    io_thread.onClose("CyKIT._run() 2")
+                    mirror("\r\n*** Reseting . . .")
+                    return True
+                continue
+
+            if noweb and not _info_is_true(client.io, "stream_ready") and check_threads >= 1:
+                continue
+
+            if check_threads < (1 if noweb else 2):
+                if io_thread is not None:
+                    io_thread.onClose("CyKIT._run() 1")
+                mirror("*** Reseting . . .")
+                return True
+    finally:
+        client.close()
+
+    return False
+
+
+def run_session(config: RunConfig) -> int:
+    while True:
         try:
-            _run(1)
-        except OSError as exp:
-            _run(1)
+            should_restart = _run_once(config)
+        except OSError:
+            should_restart = True
+        except ConnectionError as exc:
+            exc_type, ex, tb = sys.exc_info()
+            imported_tb_info = traceback.extract_tb(tb)[-1]
+            line_number = imported_tb_info[1]
+            print_format = "{}: Exception in line: {}, message: {}"
+            mirror("Error in file: " + str(tb.tb_frame.f_code.co_filename) + " >>> ")
+            mirror("CyKITv2._run() : " + print_format.format(exc_type.__name__, line_number, ex))
+            mirror(traceback.format_exc())
+            mirror(" ) WARNING_) CyKIT2._run E1: " + str(exc))
+            mirror("Error # " + str(exc))
+            return 1
+        except Exception as exc:
+            exc_type, ex, tb = sys.exc_info()
+            imported_tb_info = traceback.extract_tb(tb)[-1]
+            line_number = imported_tb_info[1]
+            print_format = "{}: Exception in line: {}, message: {}"
+            mirror("Error in file: " + str(tb.tb_frame.f_code.co_filename) + " >>> ")
+            mirror("CyKITv2._run() : " + print_format.format(exc_type.__name__, line_number, ex))
+            mirror(traceback.format_exc())
+            mirror(" ) WARNING_) CyKIT2._run E1: " + str(exc))
+            mirror("Error # " + str(exc))
+            return 1
 
-    except Exception as e:
-        exc_type, ex, tb = sys.exc_info()
-        imported_tb_info = traceback.extract_tb(tb)[-1]
-        line_number = imported_tb_info[1]
-        print_format = '{}: Exception in line: {}, message: {}'
+        if not should_restart:
+            return 0
 
-        mirror("Error in file: " + str(tb.tb_frame.f_code.co_filename) + " >>> ")
-        mirror("CyKITv2._run() : " + print_format.format(exc_type.__name__, line_number, ex))
-        mirror(traceback.format_exc())
 
-        mirror(" ) WARNING_) CyKIT2._run E1: " + str(e))
-        mirror("Error # " + str(e))
-        mirror("> Device Time Out or Disconnect . . .  [ Reconnect to Server. ]")
-        _run(1)
+def _validate_model(model: int) -> int:
+    try:
+        normalize_model(model)
+    except ValueError as exc:
+        raise typer.BadParameter("Model must be a numeric value from 1 to 7.") from exc
+    return model
+
+
+def _validate_port(port: int) -> int:
+    if port < 1025 or port > 65535:
+        raise typer.BadParameter("Port must be in range 1025-65535.")
+    return port
+
+
+def _build_modern_parameters(
+    config: str,
+    *,
+    verbose: bool,
+    info: bool,
+    confirm: bool,
+    noheader: bool,
+    nocounter: bool,
+    nobattery: bool,
+    blankdata: bool,
+    blankcsv: bool,
+    outputdata: bool,
+    outputraw: bool,
+    generic: bool,
+    openvibe: bool,
+    integer: bool,
+    baseline: bool,
+    filter_enabled: bool,
+    allmode: bool,
+    gyromode: bool,
+    noweb: bool,
+    bluetooth_key: str | None,
+    bluetooth_auto: bool,
+    format_value: int | None,
+    ovdelay: int | None,
+    ovsamples: int | None,
+) -> str:
+    tokens = list(_token_set(config))
+
+    def add(token: str, enabled: bool) -> None:
+        if enabled and token not in tokens:
+            tokens.append(token)
+
+    add("verbose", verbose)
+    add("info", info)
+    add("confirm", confirm)
+    add("noheader", noheader)
+    add("nocounter", nocounter)
+    add("nobattery", nobattery)
+    add("blankdata", blankdata)
+    add("blankcsv", blankcsv)
+    add("outputdata", outputdata)
+    add("outputraw", outputraw)
+    add("generic", generic)
+    add("openvibe", openvibe)
+    add("integer", integer)
+    add("baseline", baseline)
+    add("filter", filter_enabled)
+    add("allmode", allmode)
+    add("gyromode", gyromode)
+    add("noweb", noweb)
+
+    normalized_bluetooth_key = _normalize_bluetooth_key(bluetooth_key)
+    if normalized_bluetooth_key:
+        tokens = [
+            token for token in tokens if token != "bluetooth" and not token.startswith("bluetooth=")
+        ]
+        tokens.append(f"bluetooth={normalized_bluetooth_key}")
+    elif bluetooth_auto and not any(token.startswith("bluetooth") for token in tokens):
+        tokens.append("bluetooth")
+
+    if format_value is not None:
+        tokens = [token for token in tokens if not token.startswith("format-")]
+        tokens.append(f"format-{format_value}")
+
+    if ovdelay is not None:
+        tokens = [token for token in tokens if not token.startswith("ovdelay:")]
+        tokens.append(f"ovdelay:{ovdelay:03d}")
+
+    if ovsamples is not None:
+        tokens = [token for token in tokens if not token.startswith("ovsamples:")]
+        tokens.append(f"ovsamples:{ovsamples:03d}")
+
+    if "eegmode" not in tokens and not allmode and not gyromode:
+        tokens.append("eegmode")
+    if not any(token.startswith("format-") for token in tokens):
+        tokens.append("format-0")
+
+    return "+".join(tokens)
+
+
+def _serialize_device_info(device: DeviceInfo) -> dict[str, object]:
+    return {
+        "name": device.name,
+        "transport": device.transport.value,
+        "model_guess": device.model_guess.name if device.model_guess is not None else None,
+        "device_key": device.device_key,
+        "serial": device.serial,
+        "address": device.address,
+        "rssi": device.rssi,
+        "metadata": dict(device.metadata),
+    }
+
+
+def _print_device_info(device: DeviceInfo) -> None:
+    typer.echo(f"name={device.name}")
+    typer.echo(f"  transport={device.transport.value}")
+    typer.echo(
+        f"  model_guess={device.model_guess.name if device.model_guess is not None else None}"
+    )
+    typer.echo(f"  device_key={device.device_key}")
+    typer.echo(f"  serial={device.serial}")
+
+
+@app.command()
+def discover(
+    transport: Annotated[
+        Transport, typer.Option("--transport", help="Transport to scan.")
+    ] = Transport.AUTO,
+    timeout: Annotated[
+        float, typer.Option("--timeout", min=0.1, help="Scan timeout in seconds.")
+    ] = 15.0,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print discovery results as JSON.")
+    ] = False,
+) -> None:
+    devices = discover_devices(
+        transport=transport, timeout=timeout, probe_gatt=True, probe_timeout=2.0
+    )
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [_serialize_device_info(device) for device in devices],
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if not devices:
+        typer.echo("No devices found.")
+        return
+    for index, device in enumerate(devices, start=1):
+        typer.echo(f"[{index}]")
+        _print_device_info(device)
+
+
+def _looks_like_legacy_args(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    first = argv[0]
+    if first in {"run", "discover", "help", "--help", "-h", "/?"}:
+        return False
+    return not first.startswith("-")
+
+
+def _legacy_config_from_argv(argv: list[str]) -> RunConfig:
+    if len(argv) == 1:
+        return RunConfig(argv[0], 54123, 1, "")
+    if len(argv) == 2:
+        return RunConfig(argv[0], int(argv[1]), 1, "")
+    if len(argv) == 3:
+        return RunConfig(argv[0], int(argv[1]), int(argv[2]), "")
+    if len(argv) == 4:
+        return RunConfig(argv[0], int(argv[1]), int(argv[2]), argv[3])
+    raise typer.BadParameter("Legacy usage accepts at most 4 arguments.")
+
+
+@app.command()
+def run(
+    host: str,
+    port: int,
+    model: Annotated[
+        int,
+        typer.Argument(
+            help="Model number: 1=Epoc Premium, 2=Epoc Consumer, 3=Insight Premium, 4=Insight Consumer, 5=Epoc+ Premium, 6=Epoc+ Consumer 16-bit, 7=Epoc+ Consumer 14-bit"
+        ),
+    ],
+    config: Annotated[str, typer.Argument(help="Legacy + separated config string.")] = "",
+    verbose: Annotated[bool, typer.Option("--verbose", help="Enable verbose output.")] = False,
+    info: Annotated[
+        bool, typer.Option("--info", help="Keep legacy info token for compatibility.")
+    ] = False,
+    confirm: Annotated[bool, typer.Option("--confirm", help="Confirm device selection.")] = False,
+    noheader: Annotated[bool, typer.Option("--noheader", help="Disable CyKITv2 headers.")] = False,
+    nocounter: Annotated[bool, typer.Option("--nocounter", help="Drop counter columns.")] = False,
+    nobattery: Annotated[bool, typer.Option("--nobattery", help="Drop battery values.")] = False,
+    blankdata: Annotated[bool, typer.Option("--blankdata", help="Inject blank data.")] = False,
+    blankcsv: Annotated[bool, typer.Option("--blankcsv", help="Add blank CSV columns.")] = False,
+    outputdata: Annotated[bool, typer.Option("--outputdata", help="Print decoded output.")] = False,
+    outputraw: Annotated[
+        bool, typer.Option("--outputraw", help="Print encrypted packets.")
+    ] = False,
+    generic: Annotated[bool, typer.Option("--generic", help="Use generic TCP mode.")] = False,
+    openvibe: Annotated[bool, typer.Option("--openvibe", help="Use OpenViBE mode.")] = False,
+    integer: Annotated[bool, typer.Option("--integer", help="Emit integer values.")] = False,
+    baseline: Annotated[bool, typer.Option("--baseline", help="Enable baseline mode.")] = False,
+    filter_enabled: Annotated[
+        bool, typer.Option("--filter", help="Enable baseline filter.")
+    ] = False,
+    allmode: Annotated[bool, typer.Option("--allmode", help="Emit EEG and gyro packets.")] = False,
+    gyromode: Annotated[bool, typer.Option("--gyromode", help="Emit gyro packets only.")] = False,
+    noweb: Annotated[
+        bool, typer.Option("--noweb", help="Run without TCP/WebSocket listener.")
+    ] = False,
+    bluetooth_key: Annotated[
+        str | None, typer.Option("--bluetooth-key", help="Use a paired Bluetooth device key.")
+    ] = None,
+    bluetooth_auto: Annotated[
+        bool, typer.Option("--bluetooth", help="Auto-detect paired Bluetooth device.")
+    ] = False,
+    format_value: Annotated[
+        int | None, typer.Option("--format", min=0, max=3, help="Output format.")
+    ] = None,
+    ovdelay: Annotated[
+        int | None, typer.Option("--ovdelay", min=0, max=999, help="OpenViBE delay multiplier.")
+    ] = None,
+    ovsamples: Annotated[
+        int | None, typer.Option("--ovsamples", min=1, max=999, help="OpenViBE sample rate.")
+    ] = None,
+) -> int:
+    config_obj = RunConfig(
+        host=host,
+        port=_validate_port(port),
+        model=_validate_model(model),
+        parameters=_build_modern_parameters(
+            config,
+            verbose=verbose,
+            info=info,
+            confirm=confirm,
+            noheader=noheader,
+            nocounter=nocounter,
+            nobattery=nobattery,
+            blankdata=blankdata,
+            blankcsv=blankcsv,
+            outputdata=outputdata,
+            outputraw=outputraw,
+            generic=generic,
+            openvibe=openvibe,
+            integer=integer,
+            baseline=baseline,
+            filter_enabled=filter_enabled,
+            allmode=allmode,
+            gyromode=gyromode,
+            noweb=noweb,
+            bluetooth_key=bluetooth_key,
+            bluetooth_auto=bluetooth_auto,
+            format_value=format_value,
+            ovdelay=ovdelay,
+            ovsamples=ovsamples,
+        ),
+    )
+    return run_session(config_obj)
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    if ctx.args:
+        legacy = _legacy_config_from_argv(ctx.args)
+        legacy.port = _validate_port(legacy.port)
+        legacy.model = _validate_model(legacy.model)
+        raise typer.Exit(run_session(legacy))
+    typer.echo(HELP_TEXT)
+    raise typer.Exit()
+
+
+def cli(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if _looks_like_legacy_args(arguments):
+        legacy = _legacy_config_from_argv(arguments)
+        legacy.port = _validate_port(legacy.port)
+        legacy.model = _validate_model(legacy.model)
+        return run_session(legacy)
+    try:
+        return int(app(args=arguments, prog_name="cykit", standalone_mode=False) or 0)
+    except typer.Exit as exc:
+        return int(exc.exit_code or 0)
+    except typer.BadParameter as exc:
+        typer.echo(str(exc), err=True)
+        return 2
+    except Exception as exc:
+        typer.echo(str(exc), err=True)
+        return 1
 
 
 if __name__ == "__main__":
-    cli()
+    raise SystemExit(cli())

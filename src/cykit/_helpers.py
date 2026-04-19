@@ -46,19 +46,138 @@ def derive_key(serial_bytes: bytes, model: Model) -> bytes:
         raise ValueError("serial_bytes must be 16 bytes long")
 
     if model == Model.EPOC_PREMIUM:
-        key = [sn[-1], 0, sn[-2], 72, sn[-1], 0, sn[-2], 84, sn[-3], 16, sn[-4], 66, sn[-3], 0, sn[-4], 80]
+        key = [
+            sn[-1],
+            0,
+            sn[-2],
+            72,
+            sn[-1],
+            0,
+            sn[-2],
+            84,
+            sn[-3],
+            16,
+            sn[-4],
+            66,
+            sn[-3],
+            0,
+            sn[-4],
+            80,
+        ]
     elif model == Model.EPOC_CONSUMER:
-        key = [sn[-1], 0, sn[-2], 84, sn[-3], 16, sn[-4], 66, sn[-1], 0, sn[-2], 72, sn[-3], 0, sn[-4], 80]
+        key = [
+            sn[-1],
+            0,
+            sn[-2],
+            84,
+            sn[-3],
+            16,
+            sn[-4],
+            66,
+            sn[-1],
+            0,
+            sn[-2],
+            72,
+            sn[-3],
+            0,
+            sn[-4],
+            80,
+        ]
     elif model == Model.INSIGHT_PREMIUM:
-        key = [sn[-2], 0, sn[-1], 68, sn[-2], 0, sn[-1], 12, sn[-4], 0, sn[-3], 21, sn[-4], 0, sn[-3], 88]
+        key = [
+            sn[-2],
+            0,
+            sn[-1],
+            68,
+            sn[-2],
+            0,
+            sn[-1],
+            12,
+            sn[-4],
+            0,
+            sn[-3],
+            21,
+            sn[-4],
+            0,
+            sn[-3],
+            88,
+        ]
     elif model == Model.INSIGHT_CONSUMER:
-        key = [sn[-1], 0, sn[-2], 21, sn[-3], 0, sn[-4], 12, sn[-3], 0, sn[-2], 68, sn[-1], 0, sn[-2], 88]
+        key = [
+            sn[-1],
+            0,
+            sn[-2],
+            21,
+            sn[-3],
+            0,
+            sn[-4],
+            12,
+            sn[-3],
+            0,
+            sn[-2],
+            68,
+            sn[-1],
+            0,
+            sn[-2],
+            88,
+        ]
     elif model == Model.EPOC_PLUS_PREMIUM:
-        key = [sn[-2], sn[-1], sn[-2], sn[-1], sn[-3], sn[-4], sn[-3], sn[-4], sn[-4], sn[-3], sn[-4], sn[-3], sn[-1], sn[-2], sn[-1], sn[-2]]
+        key = [
+            sn[-2],
+            sn[-1],
+            sn[-2],
+            sn[-1],
+            sn[-3],
+            sn[-4],
+            sn[-3],
+            sn[-4],
+            sn[-4],
+            sn[-3],
+            sn[-4],
+            sn[-3],
+            sn[-1],
+            sn[-2],
+            sn[-1],
+            sn[-2],
+        ]
     elif model == Model.EPOC_PLUS_CONSUMER:
-        key = [sn[-1], sn[-2], sn[-2], sn[-3], sn[-3], sn[-3], sn[-2], sn[-4], sn[-1], sn[-4], sn[-2], sn[-2], sn[-4], sn[-4], sn[-2], sn[-1]]
+        key = [
+            sn[-1],
+            sn[-2],
+            sn[-2],
+            sn[-3],
+            sn[-3],
+            sn[-3],
+            sn[-2],
+            sn[-4],
+            sn[-1],
+            sn[-4],
+            sn[-2],
+            sn[-2],
+            sn[-4],
+            sn[-4],
+            sn[-2],
+            sn[-1],
+        ]
     elif model == Model.EPOC_PLUS_STANDARD:
-        key = [sn[-1], 0, sn[-2], 21, sn[-3], 0, sn[-4], 12, sn[-3], 0, sn[-2], 68, sn[-1], 0, sn[-2], 88]
+        key = [
+            sn[-1],
+            0,
+            sn[-2],
+            21,
+            sn[-3],
+            0,
+            sn[-4],
+            12,
+            sn[-3],
+            0,
+            sn[-2],
+            68,
+            sn[-1],
+            0,
+            sn[-2],
+            88,
+        ]
     else:
         raise ValueError(f"Unsupported model: {model}")
     return bytes(bytearray(key))

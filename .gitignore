@@ -16,3 +16,4 @@ uv.lock
 EEG-Logs/
 docs/_build/
 plans/
+.ruff_cache/

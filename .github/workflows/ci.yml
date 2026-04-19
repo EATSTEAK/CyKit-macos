@@ -6,10 +6,20 @@ on:
     branches: [master]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --extra test --extra docs --extra lint
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run basedpyright
+
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --extra test --extra docs
+      - run: uv sync --extra test --extra docs --extra lint
       - run: uv run pytest
