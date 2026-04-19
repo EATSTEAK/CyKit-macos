@@ -11,7 +11,7 @@ class BLEBackend(abc.ABC):
     """Abstract base class for platform-specific BLE backends."""
 
     @abc.abstractmethod
-    def discover_devices(self, timeout=10.0):
+    def discover_devices(self, timeout=10.0, probe_gatt=True, probe_timeout=2.0):
         """Return nearby CyKit-compatible BLE devices as dictionaries."""
         ...
 

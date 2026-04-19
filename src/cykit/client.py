@@ -85,6 +85,10 @@ class CyKitClient:
             self._io.setInfo("DeviceObject", object())
             self._eeg = eeg.EEG(int(self.model), self._io, config)
             serial_bytes = self._resolve_serial_bytes()
+            if len(serial_bytes) != 16:
+                raise ConnectionError(
+                    "Device discovery did not produce a valid 16-byte serial. Bluetooth auto-detect may have failed to match the headset name or key."
+                )
             self._cipher = AES.new(derive_key(serial_bytes, self.model), AES.MODE_ECB)
             self._device_info = self._resolve_device_info()
             self._connected = True

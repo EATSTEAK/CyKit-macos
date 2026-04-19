@@ -15,6 +15,7 @@ USB_KNOWN_NAMES = {
 
 BLUETOOTH_MODEL_GUESSES = {
     "Insight": Model.INSIGHT_CONSUMER,
+    "Insight2": Model.INSIGHT_CONSUMER,
     "EPOC": Model.EPOC_PLUS_CONSUMER,
     "EPOC+": Model.EPOC_PLUS_CONSUMER,
 }
@@ -64,10 +65,10 @@ def _discover_usb_devices() -> list[DeviceInfo]:
     return results
 
 
-def _discover_bluetooth_devices(timeout: float) -> list[DeviceInfo]:
+def _discover_bluetooth_devices(timeout: float, *, probe_gatt: bool = True, probe_timeout: float = 2.0) -> list[DeviceInfo]:
     backend = get_ble_backend()
     try:
-        devices = backend.discover_devices(timeout=timeout)
+        devices = backend.discover_devices(timeout=timeout, probe_gatt=probe_gatt, probe_timeout=probe_timeout)
     except AttributeError as exc:
         raise DiscoveryError("Active BLE backend does not support device discovery") from exc
     except Exception as exc:
@@ -80,7 +81,7 @@ def _discover_bluetooth_devices(timeout: float) -> list[DeviceInfo]:
                 name=device.get("name") or "Unknown",
                 device_key=device.get("device_key"),
                 transport=Transport.BLUETOOTH,
-                model_guess=BLUETOOTH_MODEL_GUESSES.get(device.get("device_type", "")),
+                model_guess=BLUETOOTH_MODEL_GUESSES.get(device.get("device_type", "")) or (Model.INSIGHT_CONSUMER if device.get("gatt_match") and "insight" in (device.get("name") or "").lower() else None),
                 serial=device.get("serial"),
                 address=device.get("address"),
                 rssi=device.get("rssi"),
@@ -90,7 +91,7 @@ def _discover_bluetooth_devices(timeout: float) -> list[DeviceInfo]:
     return results
 
 
-def discover(*, transport: Transport = Transport.AUTO, timeout: float = 15.0) -> list[DeviceInfo]:
+def discover(*, transport: Transport = Transport.AUTO, timeout: float = 15.0, probe_gatt: bool = True, probe_timeout: float = 2.0) -> list[DeviceInfo]:
     """Discover available CyKit-compatible devices.
 
     Args:
@@ -116,7 +117,7 @@ def discover(*, transport: Transport = Transport.AUTO, timeout: float = 15.0) ->
 
     if transport in {Transport.AUTO, Transport.BLUETOOTH}:
         try:
-            results.extend(_discover_bluetooth_devices(timeout))
+            results.extend(_discover_bluetooth_devices(timeout, probe_gatt=probe_gatt, probe_timeout=probe_timeout))
         except Exception as exc:
             errors.append(exc)
             if transport == Transport.BLUETOOTH:

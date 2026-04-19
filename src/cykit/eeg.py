@@ -59,6 +59,18 @@ _ble_backend = None
 eeg_driver = "pyusb"
 
 
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
+
+
+def _info_is_true(io, name):
+    return _as_bool(io.getInfo(name))
+
+
 def configure_runtime(config=""):
     global eeg_config
     global verbose
@@ -147,6 +159,8 @@ class ControllerIO():
         self.device = None
         self.packet_count = 0
         self.setInfo("recording","False")
+        self.setInfo("stream_ready", "False")
+        self.setInfo("stream_wait_reported", "False")
 
     #  Data Input.
     # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯
@@ -165,7 +179,7 @@ class ControllerIO():
             if ioCommand[1] == "setDataMode":
                 self.datamode = int(ioCommand[2])
                 self.setInfo("datamode",str(self.datamode))
-                if eval(self.getInfo("verbose")) == True:
+                if _info_is_true(self, "verbose") == True:
                     mirror.text(">>> Client Setting >>> DataMode = " + str(self.datamode))
                 return
 
@@ -208,7 +222,7 @@ class ControllerIO():
                 return
 
             if ioCommand[1] == "RecordStart":
-                if eval(self.getInfo("recording")) == True:
+                if _info_is_true(self, "recording") == True:
                     self.stopRecord()
                     mirror.text("[Record Stopped] -- Press 'Record' to Record a new file.")
                     return
@@ -243,7 +257,7 @@ class ControllerIO():
                         self.recordInc += 1
                         self.recordFile = self.recordFile.split("_")[0] + "_" + str(self.recordInc)
                         pathFinder = cyPath + "/EEG-Logs/" + self.recordFile + ".csv"
-                        if eval(self.getInfo("verbose")) == True:
+                        if _info_is_true(self, "verbose") == True:
                             mirror.text("[Record: File exists. Changing to: " + self.recordFile + ".csv ]")
                 except Exception as msg:
                     mirror.text("File Selection Error: " + str(msg))
@@ -288,7 +302,7 @@ class ControllerIO():
                     return
 
             if ioCommand[1] == "RecordStop":
-                if eval(self.getInfo("recording")) == False:
+                if _info_is_true(self, "recording") == False:
                     return
                 mirror.text("[Stop] Recording \r\n")
                 mirror.text(("═" * 50))
@@ -337,9 +351,9 @@ class ControllerIO():
     def onGeneric(self, uid):
         self.setInfo("status","True")
         self.setInfo("generic","True")
-        if eval(self.getInfo("openvibe")) == True:
+        if _info_is_true(self, "openvibe") == True:
             return
-        if eval(self.getInfo("noheader")) == True:
+        if _info_is_true(self, "noheader") == True:
             return
         self.server.sendData("CyKITv2:::Connected")
         return
@@ -365,7 +379,7 @@ class ControllerIO():
         return self.getInfo("status")
 
     def onClose(self, location):
-        if eval(self.getInfo("verbose")) == True:
+        if _info_is_true(self, "verbose") == True:
             mirror.text("*** Connection Closing. (Location: " + location + ")")
         self.status = False
         self.setInfo("status","False")
@@ -380,7 +394,7 @@ class ControllerIO():
         return self.aModel
 
     def startRecord(self, recordPacket):
-        if eval(self.getInfo("recording")) == False:
+        if _info_is_true(self, "recording") == False:
             return
         try:
             self.packet_count += 1
@@ -391,7 +405,7 @@ class ControllerIO():
             pass
 
     def stopRecord(self):
-        if eval(self.getInfo("recording")) == False or self.cyFile == None:
+        if _info_is_true(self, "recording") == False or self.cyFile == None:
             return
         self.setInfo("recording","False")
         try:
@@ -427,7 +441,7 @@ class ControllerIO():
         return self.format
 
     def isRecording(self):
-        return eval(self.getInfo("recording"))
+        return _info_is_true(self, "recording")
 
     def maskChange(self):
         return self.newMask
@@ -728,7 +742,7 @@ class EEG(object):
             self.channel = None
 
 
-        if eval(self.cyIO.getInfo("verbose")) == True:
+        if _info_is_true(self.cyIO, "verbose") == True:
             mirror.text("    Format = " + str(self.format))
             try:
                 mirror.text(" Delimiter = " + str(self.delimiter))
@@ -742,16 +756,16 @@ class EEG(object):
 
         #  Set Config Flags and Insert Into Dictionary.
         # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-        if eval(self.cyIO.getInfo("verbose")) == True:
+        if _info_is_true(self.cyIO, "verbose") == True:
             mirror.text("═" *90 + "\r\n")
             mirror.text(" Config Options = { \r\n")
         for index in self.configFlags:
             if str(index) in config:
-                if eval(self.cyIO.getInfo("verbose")) == True:
+                if _info_is_true(self.cyIO, "verbose") == True:
                     mirror.text("   " + index + (chr(9)*2) + " " + str(True) + "  *")
                 locals()['self.' + index] = True
             else:
-                if eval(self.cyIO.getInfo("verbose")) == True:
+                if _info_is_true(self.cyIO, "verbose") == True:
                     mirror.text("   " + index + (chr(9)* 2) + str(False))
                 locals()['self.' + index] = False
             self.cyIO.setInfo(index,str(locals()['self.' + index]))
@@ -762,7 +776,7 @@ class EEG(object):
         self.cyIO.setInfo("format", self.format)
         self.cyIO.setInfo("config", config)
 
-        if eval(self.cyIO.getInfo("verbose")) == True:
+        if _info_is_true(self.cyIO, "verbose") == True:
             mirror.text("\r\n }")
         mirror.text("═" *50 + "\r\n")
 
@@ -817,6 +831,8 @@ class EEG(object):
                 mirror.text("> Scanning for BLE device . . .")
                 name_filter = "Insight" if model in (3, 4) else "EPOC"
                 dev_type, hex_key = _ble.scan_for_device(name_filter, BT_manualkey, timeout=15.0)
+                if not hex_key:
+                    raise RuntimeError("Matched BLE candidate does not expose an 8-digit device key needed for Insight decryption.")
 
                 mirror.text("\r\n> Found Bluetooth Device: [" + dev_type + " " + hex_key + "] \r\n")
 
@@ -842,6 +858,7 @@ class EEG(object):
                         return
                     if BTLE_device_name == "Insight":
                         tasks.put(bytearray(data))
+                        self.cyIO.setInfo("stream_ready", "True")
                     else:
                         # EPOC+ BLE: reassemble two-part packets
                         global encrypted_data
@@ -854,6 +871,7 @@ class EEG(object):
                             if len(encrypted_data) >= 16:
                                 encrypted_data = encrypted_data + bytearray(data[2:18])
                                 tasks.put(encrypted_data)
+                                self.cyIO.setInfo("stream_ready", "True")
 
                 _ble.subscribe_notifications(DATA_UUID_BARE, _ble_data_callback)
                 try:
@@ -869,7 +887,9 @@ class EEG(object):
             except Exception as e:
                 mirror.text("> Error Initializing Bluetooth (bleak). ")
                 mirror.text(" Bluetooth Setup() Error: " + str(e))
-                return
+                raise RuntimeError(
+                    "Bluetooth device discovery failed. The device may be advertising without an 'Insight' name, may not be paired, or macOS may not be exposing its local name."
+                ) from e
 
 
         #  PyUSB.
@@ -884,7 +904,7 @@ class EEG(object):
                 self.product_name = None
                 all_devices = usb.core.find(find_all=True, backend=backend)
                 for select_device in all_devices:
-                    if eval(self.cyIO.getInfo("verbose")) == True:
+                    if _info_is_true(self.cyIO, "verbose") == True:
                         mirror.text("═" * 50)
                     try:
                         company = str(usb.util.get_string(select_device, select_device.iManufacturer))
@@ -895,7 +915,7 @@ class EEG(object):
                     except:
                         mirror.text("> USB Device (No Additional Information)")
                         continue
-                    if eval(self.cyIO.getInfo("verbose")) == True:
+                    if _info_is_true(self.cyIO, "verbose") == True:
                         mirror.text(" Company: " + company)
                         mirror.text("  Device: " + product)
                         mirror.text("  Vendor: " + vid)
@@ -942,14 +962,14 @@ class EEG(object):
                                         device_firmware   = "0x" + str(hex(detail_info[2]))[2:] +  str(hex(detail_info[3])[2:])
                                         software_firmware = "0x" + str(hex(detail_info[4]))[2:] +  str(hex(detail_info[5])[2:])
 
-                                    if eval(self.cyIO.getInfo("verbose")) == True:
+                                    if _info_is_true(self.cyIO, "verbose") == True:
                                         mirror.text(str(list(detail_info)))
                                         mirror.text(" Device Firmware = "       + device_firmware)
                                         mirror.text(" Software Firmware = "     + software_firmware)
 
                                     self.serial_number = str(usb.util.get_string(self.device, self.device.iSerialNumber))
                                     self.product_name = str(usb.util.get_string(self.device, select_device.iProduct))
-                                if eval(self.cyIO.getInfo("verbose")) == True:
+                                if _info_is_true(self.cyIO, "verbose") == True:
                                     mirror.text("> Using Device: " + self.product_name + "\r\n")
                                     mirror.text(" ░░ Serial Number: " + self.serial_number + " ░░\r\n")
 
@@ -1041,7 +1061,7 @@ class EEG(object):
         if eeg_driver == "bluetooth":
             return bytes(bytearray(k))
 
-        if eval(self.cyIO.getInfo("verbose")) == True:
+        if _info_is_true(self.cyIO, "verbose") == True:
             mirror.text("═" *90)
             mirror.text("   AES Key = " + str(k))
         return k
@@ -1075,14 +1095,14 @@ class EEG(object):
 
         #  Display Active Python Process Threads.
         # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-        if eval(cyIO.getInfo("verbose")) == True:
+        if _info_is_true(cyIO, "verbose") == True:
             t_array = str(list(map(lambda x: x.getName(), threading.enumerate())))
             mirror.text("\r\nActive Threads = {")
             mirror.text("   " + t_array)
             mirror.text("} \r\n")
 
         cyIO.setBaselineMode(self.baseline)
-        while eval(cyIO.getInfo("status")) != True:
+        while _info_is_true(cyIO, "status") != True:
 
             time.sleep(0)
             pass
@@ -1091,11 +1111,11 @@ class EEG(object):
 
         #  Bypass Sending Header Data.
         # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-        if eval(cyIO.getInfo("noheader")) == False:
+        if _info_is_true(cyIO, "noheader") == False:
 
             #  Connected. Send Device Header to Data Stream.
             # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
-            if eval(cyIO.getInfo("status")) == True and eval(cyIO.getInfo("noweb")) == False:
+            if _info_is_true(cyIO, "status") == True and _info_is_true(cyIO, "noweb") == False:
                 cyIO.sendInfo("device")
                 cyIO.sendInfo("serial")
 
@@ -1117,7 +1137,7 @@ class EEG(object):
         # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
 
         for index in self.configFlags:
-            setattr(self, index, eval(cyIO.getInfo(index)))
+            setattr(self, index, _info_is_true(cyIO, index))
 
         #  EPOC+ Mode. (Direct USB Connection)
         # ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯
@@ -1125,7 +1145,7 @@ class EEG(object):
             while self.running:
                 time.sleep(0)
 
-                if eval(cyIO.getInfo("status")) != True:
+                if _info_is_true(cyIO, "status") != True:
                     time.sleep(0)
                     self.running = False
                     continue
@@ -1140,7 +1160,7 @@ class EEG(object):
             else:
                 AES_key = bytes(bytearray(key))
 
-            if eval(cyIO.getInfo("verbose")) == True:
+            if _info_is_true(cyIO, "verbose") == True:
                 mirror.text(" Cipher Key = "  + str(key))
 
             cipher = AES.new(AES_key, AES.MODE_ECB)
@@ -1151,7 +1171,7 @@ class EEG(object):
         while self.running:
             time.sleep(0)
 
-            if eval(cyIO.getInfo("status")) != True:
+            if _info_is_true(cyIO, "status") != True:
                 time.sleep(0)
                 self.running = False
                 continue
@@ -1187,6 +1207,9 @@ class EEG(object):
                     continue
                 # Avoid busy-wait when queue is empty
                 if tasks.empty():
+                    if _info_is_true(cyIO, "stream_ready") == False and _info_is_true(cyIO, "stream_wait_reported") == False:
+                        mirror.text("> Bluetooth connected; waiting for first EEG packet . . .")
+                        cyIO.setInfo("stream_wait_reported", "True")
                     time.sleep(0.005)
 
             if eeg_driver == "pyusb" and self.blankdata == False:
@@ -1208,7 +1231,7 @@ class EEG(object):
                             mirror.text("\r\n ░░░ Device Interference or Turned Off ░░░ \r\n")
                             if cyIO.isRecording() == True:
                                 cyIO.stopRecord()
-                            if eval(cyIO.getInfo("noheader")) == False:
+                            if _info_is_true(cyIO, "noheader") == False:
                                 cyIO.sendData(1, "CyKITv2:::noData")
                             cyIO.setInfo("status","False")
                             cyIO.onClose("dataLoss")
@@ -1262,7 +1285,7 @@ class EEG(object):
                 self.format = int(cyIO.getInfo("format"))
                 self.datamode = int(cyIO.getInfo("datamode"))
                 self.delimiter = cyIO.getInfo("delimiter")
-                self.baseline = eval(cyIO.getInfo("baselinemode"))
+                self.baseline = _info_is_true(cyIO, "baselinemode")
 
                 if check_mask != None:
                     self.mask[check_mask] = cyIO.getMask(check_mask)
@@ -1306,7 +1329,7 @@ class EEG(object):
                     # Function Every Second.
                     if (int(time.time() % 60) - self.getSeconds) == 1:
                         time.sleep(0)
-                        if eval(cyIO.getInfo("status")) != True:
+                        if _info_is_true(cyIO, "status") != True:
                             self.running = False
                             continue
 
@@ -1369,10 +1392,10 @@ class EEG(object):
                                 v_2 = '0b' + z[(i_2):(i_2+6)]
 
                                 if i == 16 or i == 18:
-                                    data_line = str(int(eval(v_1))) + self.delimiter + str(int(eval(v_2)))
+                                    data_line = str(int(v_1, 2)) + self.delimiter + str(int(v_2, 2))
                                     continue
 
-                                packet_data = packet_data + self.convertEPOC_PLUS(str(int(eval(v_2))), str(int(eval(v_1)))) + self.delimiter
+                                packet_data = packet_data + self.convertEPOC_PLUS(str(int(v_2, 2)), str(int(v_1, 2))) + self.delimiter
 
                             if self.nobattery == False:
                                 packet_data += data_line                          # Append data lines for battery and quality.
@@ -1417,7 +1440,7 @@ class EEG(object):
                                 v_1 = '0b' + z[(i_1):(i_2)]
                                 v_2 = '0b' + z[(i_2):(i_2+6)]
 
-                                packet_data = packet_data + str(int(eval(v_1))) + self.delimiter + str(int(eval(v_2))) + self.delimiter
+                                packet_data = packet_data + str(int(v_1, 2)) + self.delimiter + str(int(v_2, 2)) + self.delimiter
 
                             packet_data = packet_data[:-len(self.delimiter)] # Remove extra delimter
 
@@ -1431,8 +1454,8 @@ class EEG(object):
                             for i in range(0, int(len(c_bits)), 14):
                                 bits_8 = '0b' + c_bits[i:i+8]
                                 bits_6 = '0b' + c_bits[i+8:i+13]
-                                bit_array.append(int(eval(bits_8)))
-                                bit_array.append(int(eval(bits_6)))
+                                bit_array.append(int(bits_8, 2))
+                                bit_array.append(int(bits_6, 2))
 
                             packet_data = str(bit_array)[:-1][1:]
 

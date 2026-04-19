@@ -7,6 +7,7 @@
 import asyncio
 import threading
 import queue
+import json
 
 from .base import BLEBackend
 
@@ -60,62 +61,170 @@ class BleakBLEBackend(BLEBackend):
     #  BLEBackend interface
     # ------------------------------------------------------------------
 
-    def discover_devices(self, timeout=10.0):
-        return self._run_coroutine(self._async_discover(timeout), timeout=timeout + 5)
+    def discover_devices(self, timeout=10.0, probe_gatt=True, probe_timeout=2.0):
+        total_timeout = timeout + (probe_timeout * 4 if probe_gatt else 5)
+        return self._run_coroutine(self._async_discover(timeout, probe_gatt=probe_gatt, probe_timeout=probe_timeout), timeout=total_timeout)
 
     def scan_for_device(self, name_filter, manual_key="AUTO-DETECT", timeout=10.0):
+        normalized_key = manual_key.upper() if isinstance(manual_key, str) else manual_key
         return self._run_coroutine(
-            self._async_scan(name_filter, manual_key, timeout),
+            self._async_scan(name_filter, normalized_key, timeout),
             timeout=timeout + 5,
         )
 
-    async def _async_discover(self, timeout):
+    def _is_emotiv_candidate(self, raw_name, device_type, device_key):
+        normalized = (raw_name or "").lower()
+        return (
+            device_type in {"Insight", "Insight2", "EPOC", "EPOC+"}
+            or "insight" in normalized
+            or "epoc" in normalized
+            or device_key is not None
+        )
+
+    async def _probe_device_gatt(self, device, probe_timeout):
+        services_seen = []
+        try:
+            client = bleak.BleakClient(device)
+            await asyncio.wait_for(client.connect(), timeout=probe_timeout)
+            try:
+                services = await client.get_services()
+            except AttributeError:
+                services = client.services
+            if services is None:
+                services = []
+            matched = False
+            for service in services:
+                uuid = str(getattr(service, "uuid", "")).lower()
+                services_seen.append(uuid)
+                if uuid in {self.DEVICE_UUID, self.DATA_UUID, self.MEMS_UUID}:
+                    matched = True
+                for characteristic in getattr(service, "characteristics", []):
+                    char_uuid = str(getattr(characteristic, "uuid", "")).lower()
+                    services_seen.append(char_uuid)
+                    if char_uuid in {self.DEVICE_UUID, self.DATA_UUID, self.MEMS_UUID}:
+                        matched = True
+            return {
+                "gatt_match": matched,
+                "gatt_services": sorted(set(services_seen)),
+                "probe_error": None,
+            }
+        except Exception as exc:
+            return {
+                "gatt_match": False,
+                "gatt_services": sorted(set(services_seen)),
+                "probe_error": str(exc),
+            }
+        finally:
+            try:
+                if 'client' in locals() and client.is_connected:
+                    await client.disconnect()
+            except Exception:
+                pass
+
+    def _device_metadata(self, device):
+        raw_device_name = getattr(device, "name", None)
+        normalized_name = (raw_device_name or "").replace("(", " ").replace(")", " ").strip()
+        parts = normalized_name.split() if normalized_name else []
+        device_type = parts[0] if parts else None
+        device_key = None
+        for part in parts[1:]:
+            if len(part) == 8 and all(char in "0123456789abcdefABCDEF" for char in part):
+                device_key = part.upper()
+                break
+        return {
+            "name": raw_device_name,
+            "raw_name": raw_device_name,
+            "device_type": device_type,
+            "device_key": device_key,
+            "address": getattr(device, "address", None),
+            "rssi": getattr(device, "rssi", None),
+            "matched_known_type": device_type in {"Insight", "Insight2", "EPOC", "EPOC+"},
+            "has_name": bool(raw_device_name),
+            "has_device_key": device_key is not None,
+            "service_uuids": [],
+            "gatt_match": False,
+            "gatt_services": [],
+            "probe_error": None,
+        }
+
+    async def _async_discover(self, timeout, probe_gatt=True, probe_timeout=2.0):
         scanner = bleak.BleakScanner()
         devices = await scanner.discover(timeout=timeout)
         results = []
         for device in devices:
-            if not device.name:
-                continue
-            raw_name = device.name.replace("(", " ").replace(")", " ").strip()
-            parts = raw_name.split()
-            device_type = parts[0] if parts else raw_name
-            device_key = parts[1] if len(parts) > 1 and len(parts[1]) == 8 else None
-            if device_type not in {"Insight", "EPOC", "EPOC+"}:
-                continue
-            results.append(
-                {
-                    "name": device.name,
-                    "device_type": device_type,
-                    "device_key": device_key,
-                    "address": getattr(device, "address", None),
-                    "rssi": getattr(device, "rssi", None),
-                }
-            )
+            metadata = self._device_metadata(device)
+            if probe_gatt and self._is_emotiv_candidate(metadata["name"], metadata["device_type"], metadata["device_key"]):
+                metadata.update(await self._probe_device_gatt(device, probe_timeout))
+            results.append(metadata)
         return results
 
     async def _async_scan(self, name_filter, manual_key, timeout):
-        devices = await self._async_discover(timeout)
+        discovered = await bleak.BleakScanner().discover(timeout=timeout)
+        devices = [self._device_metadata(device) | {"_device": device} for device in discovered]
 
-        for device in devices:
-            device_name = device["name"]
-            dev_type = device["device_type"]
-            hex_key = device["device_key"]
-            if name_filter not in device_name or hex_key is None:
-                continue
-            if manual_key != "AUTO-DETECT" and hex_key != manual_key:
-                continue
-            scanner = bleak.BleakScanner()
-            discovered = await scanner.discover(timeout=0.1)
-            for candidate in discovered:
-                if candidate.name == device_name:
-                    self._device = candidate
-                    break
-            self._device_name = dev_type
-            self._hex_key = hex_key
-            return (dev_type, hex_key)
+        ranked_devices = sorted(
+            devices,
+            key=lambda device: (
+                not device.get("matched_known_type", False),
+                not bool(device.get("device_key")),
+                not bool(device.get("name")),
+            ),
+        )
 
+        if manual_key != "AUTO-DETECT":
+            for device in ranked_devices:
+                normalized_hex_key = (device.get("device_key") or "").upper()
+                if normalized_hex_key != manual_key:
+                    continue
+                candidate = device.get("_device")
+                if candidate is None:
+                    continue
+                device_name = device.get("name") or ""
+                dev_type = device.get("device_type")
+                self._device = candidate
+                self._device_name = "Insight" if (dev_type in {"Insight", "Insight2"} or "insight" in device_name.lower()) else (dev_type or name_filter)
+                self._hex_key = normalized_hex_key
+                return (self._device_name, self._hex_key)
+
+        for device in ranked_devices:
+            device_name = device.get("name") or ""
+            dev_type = device.get("device_type")
+            hex_key = device.get("device_key")
+            normalized_hex_key = hex_key.upper() if isinstance(hex_key, str) else hex_key
+            if manual_key != "AUTO-DETECT":
+                if normalized_hex_key != manual_key:
+                    continue
+            else:
+                if not self._is_emotiv_candidate(device_name, dev_type, normalized_hex_key):
+                    continue
+                if name_filter.lower() not in device_name.lower() and dev_type not in {"Insight", "Insight2", "EPOC", "EPOC+"}:
+                    continue
+            candidate = device.get("_device")
+            if candidate is None:
+                continue
+            self._device = candidate
+            self._device_name = "Insight" if (dev_type in {"Insight", "Insight2"} or "insight" in device_name.lower()) else (dev_type or name_filter)
+            self._hex_key = normalized_hex_key or ""
+            return (self._device_name, self._hex_key)
+
+        diagnostic_summary = [
+            {
+                "name": device.get("name"),
+                "device_type": device.get("device_type"),
+                "device_key": device.get("device_key"),
+                "address": device.get("address"),
+                "rssi": device.get("rssi"),
+                "has_name": device.get("has_name"),
+                "has_device_key": device.get("has_device_key"),
+                "gatt_match": device.get("gatt_match"),
+                "probe_error": device.get("probe_error"),
+            }
+            for device in devices
+        ]
         raise RuntimeError(
-            f"No BLE device with '{name_filter}' in name found (timeout={timeout}s)"
+            f"No BLE device with '{name_filter}' in name found (timeout={timeout}s). "
+            "The headset may be advertising without an Insight name, may not expose an 8-digit key in the local name, or macOS/CoreBluetooth may be hiding the name while EMOTIV Launcher is connected. "
+            f"Visible BLE candidates: {json.dumps(diagnostic_summary, ensure_ascii=False)}"
         )
 
     def connect(self, timeout=10.0):

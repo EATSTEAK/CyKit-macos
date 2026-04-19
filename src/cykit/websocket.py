@@ -23,6 +23,16 @@ import struct
 import traceback
 import inspect
 
+
+def _info_is_true(io, name):
+    value = io.getInfo(name)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
+
+
 class dbg():
     def txt(custom_string):
         return
@@ -88,7 +98,7 @@ class socketIO():
         self.ov_packetCount = 0
         self.verbose = False
         self.io.setInfo("generic","False")
-        self.verbose = eval(self.io.getInfo("verbose"))
+        self.verbose = _info_is_true(self.io, "verbose")
 
         if uid == 0:
             self.io.setInfo("generic","True")
@@ -105,7 +115,7 @@ class socketIO():
         
     def Connect(self):
         
-        if eval(self.io.getInfo("noweb")) == True:
+        if _info_is_true(self.io, "noweb") == True:
             time.sleep(0)
             return "noweb"
         mirror.text("(-) Connecting . . .")
@@ -134,18 +144,18 @@ class socketIO():
         self.socketThreadRunning = True
         time.sleep(.001)
 
-        if eval(self.io.getInfo("noweb")) == True:
+        if _info_is_true(self.io, "noweb") == True:
 
             time.sleep(.001)
             while self.socketThreadRunning == True:
 
-                if eval(self.io.getInfo("status")) != True:
+                if _info_is_true(self.io, "status") != True:
                     return
                 time.sleep(.001)
                 continue
             return
 
-        if eval(self.io.getInfo("openvibe")) == True:
+        if _info_is_true(self.io, "openvibe") == True:
                 time.sleep(.001)
                 self.io.onGeneric(0)
                 self.ovdelay = (int(self.io.getInfo("ovdelay")) * 100)
@@ -153,14 +163,14 @@ class socketIO():
                 
         while self.socketThreadRunning == True:
             time.sleep(.001)
-            if eval(self.io.getInfo("openvibe")) == True:
+            if _info_is_true(self.io, "openvibe") == True:
                 self.openvibeTimer = 0
                 while self.openvibeTimer > self.ovdelay:
                     time.sleep(.001)
                     self.openvibeTimer += 1
                 return
 
-            if eval(self.io.getInfo("generic")) == True:
+            if _info_is_true(self.io, "generic") == True:
                 try:
                     self.con.setblocking(0)
                     ready = select.select([self.con], [], [], 1)
@@ -174,7 +184,7 @@ class socketIO():
                         except:
                             return
                         self.io.onGeneric(0)
-                        if eval(self.io.getInfo("openvibe")) == True:
+                        if _info_is_true(self.io, "openvibe") == True:
                             self.openvibe = True
                         continue
                     continue
@@ -338,7 +348,7 @@ class socketIO():
         #self.io.setInfo("generic","False")
         
         if "closed" not in str(self.con):
-            if eval(self.io.getInfo("noweb")) == False:
+            if _info_is_true(self.io, "noweb") == False:
                 self.con.close()
                 self.io.onClose("CyWebSocket")
                 return
@@ -393,10 +403,10 @@ class socketIO():
             
     def sendData(self, text):
         
-        if eval(self.io.getInfo("status")) == False:
+        if _info_is_true(self.io, "status") == False:
             return
             
-        if eval(self.io.getInfo("noweb")) == True:
+        if _info_is_true(self.io, "noweb") == True:
             if "outputdata" not in self.io.getInfo("config"):
                 mirror.text(str(text))
             return "noweb"

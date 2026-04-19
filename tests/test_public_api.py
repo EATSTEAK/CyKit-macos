@@ -17,7 +17,7 @@ from cykit import (
     Transport,
     discover,
 )
-from cykit.exceptions import RecordingError
+from cykit.exceptions import ConnectionError, RecordingError
 
 
 def test_root_public_import_surface() -> None:
@@ -100,3 +100,33 @@ def test_path_only_name_uses_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     target = client.control.start_recording("session")
     assert target == tmp_path / "session.csv"
     client.control.stop_recording()
+
+
+def test_connect_rejects_invalid_serial_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = CyKitClient(Model.INSIGHT_CONSUMER)
+
+    class DummyIO:
+        def __init__(self) -> None:
+            self.info = {}
+
+        def setInfo(self, key: str, value: str) -> None:
+            self.info[key] = value
+
+        def getInfo(self, key: str) -> str:
+            return self.info.get(key, "0")
+
+        def isRecording(self) -> bool:
+            return False
+
+        def stopRecord(self) -> None:
+            return None
+
+    class DummyEEG:
+        serial_number = b"short"
+
+    monkeypatch.setattr("cykit.client.eeg.configure_runtime", lambda config: None)
+    monkeypatch.setattr("cykit.client.eeg.ControllerIO", DummyIO)
+    monkeypatch.setattr("cykit.client.eeg.EEG", lambda model, io, config: DummyEEG())
+
+    with pytest.raises(ConnectionError, match="16-byte serial"):
+        client.connect()
