@@ -1,23 +1,21 @@
-# -*- coding: utf8 -*-
 #
 #  platform_ble/bleak_backend.py
 #  macOS / Linux BLE backend using the bleak library (CoreBluetooth / BlueZ).
 #
 
 import asyncio
-import threading
-import queue
 import json
+import threading
 
 from .base import BLEBackend
 
 try:
     import bleak
-except ImportError:
+except ImportError as exc:
     raise ImportError(
         "The 'bleak' package is required for Bluetooth on macOS/Linux. "
         "Install it with: pip install bleak   (or: uv add bleak)"
-    )
+    ) from exc
 
 
 class BleakBLEBackend(BLEBackend):
@@ -25,13 +23,13 @@ class BleakBLEBackend(BLEBackend):
 
     # Emotiv GATT UUIDs
     DEVICE_UUID = "81072f40-9f3d-11e3-a9dc-0002a5d5c51b"
-    DATA_UUID   = "81072f41-9f3d-11e3-a9dc-0002a5d5c51b"
-    MEMS_UUID   = "81072f42-9f3d-11e3-a9dc-0002a5d5c51b"
+    DATA_UUID = "81072f41-9f3d-11e3-a9dc-0002a5d5c51b"
+    MEMS_UUID = "81072f42-9f3d-11e3-a9dc-0002a5d5c51b"
 
     def __init__(self):
-        self._device = None       # bleak.BLEDevice from scan
-        self._client = None       # bleak.BleakClient
-        self._loop = None         # dedicated asyncio event loop
+        self._device = None  # bleak.BLEDevice from scan
+        self._client = None  # bleak.BleakClient
+        self._loop = None  # dedicated asyncio event loop
         self._loop_thread = None  # daemon thread running the loop
         self._connected = False
         self._device_name = ""
@@ -63,7 +61,10 @@ class BleakBLEBackend(BLEBackend):
 
     def discover_devices(self, timeout=10.0, probe_gatt=True, probe_timeout=2.0):
         total_timeout = timeout + (probe_timeout * 4 if probe_gatt else 5)
-        return self._run_coroutine(self._async_discover(timeout, probe_gatt=probe_gatt, probe_timeout=probe_timeout), timeout=total_timeout)
+        return self._run_coroutine(
+            self._async_discover(timeout, probe_gatt=probe_gatt, probe_timeout=probe_timeout),
+            timeout=total_timeout,
+        )
 
     def scan_for_device(self, name_filter, manual_key="AUTO-DETECT", timeout=10.0):
         normalized_key = manual_key.upper() if isinstance(manual_key, str) else manual_key
@@ -116,7 +117,7 @@ class BleakBLEBackend(BLEBackend):
             }
         finally:
             try:
-                if 'client' in locals() and client.is_connected:
+                if "client" in locals() and client.is_connected:
                     await client.disconnect()
             except Exception:
                 pass
@@ -153,7 +154,9 @@ class BleakBLEBackend(BLEBackend):
         results = []
         for device in devices:
             metadata = self._device_metadata(device)
-            if probe_gatt and self._is_emotiv_candidate(metadata["name"], metadata["device_type"], metadata["device_key"]):
+            if probe_gatt and self._is_emotiv_candidate(
+                metadata["name"], metadata["device_type"], metadata["device_key"]
+            ):
                 metadata.update(await self._probe_device_gatt(device, probe_timeout))
             results.append(metadata)
         return results
@@ -182,7 +185,11 @@ class BleakBLEBackend(BLEBackend):
                 device_name = device.get("name") or ""
                 dev_type = device.get("device_type")
                 self._device = candidate
-                self._device_name = "Insight" if (dev_type in {"Insight", "Insight2"} or "insight" in device_name.lower()) else (dev_type or name_filter)
+                self._device_name = (
+                    "Insight"
+                    if (dev_type in {"Insight", "Insight2"} or "insight" in device_name.lower())
+                    else (dev_type or name_filter)
+                )
                 self._hex_key = normalized_hex_key
                 return (self._device_name, self._hex_key)
 
@@ -197,13 +204,22 @@ class BleakBLEBackend(BLEBackend):
             else:
                 if not self._is_emotiv_candidate(device_name, dev_type, normalized_hex_key):
                     continue
-                if name_filter.lower() not in device_name.lower() and dev_type not in {"Insight", "Insight2", "EPOC", "EPOC+"}:
+                if name_filter.lower() not in device_name.lower() and dev_type not in {
+                    "Insight",
+                    "Insight2",
+                    "EPOC",
+                    "EPOC+",
+                }:
                     continue
             candidate = device.get("_device")
             if candidate is None:
                 continue
             self._device = candidate
-            self._device_name = "Insight" if (dev_type in {"Insight", "Insight2"} or "insight" in device_name.lower()) else (dev_type or name_filter)
+            self._device_name = (
+                "Insight"
+                if (dev_type in {"Insight", "Insight2"} or "insight" in device_name.lower())
+                else (dev_type or name_filter)
+            )
             self._hex_key = normalized_hex_key or ""
             return (self._device_name, self._hex_key)
 
@@ -255,11 +271,11 @@ class BleakBLEBackend(BLEBackend):
         await self._client.start_notify(char_uuid, _handler)
 
     def disconnect(self):
+        import contextlib
+
         if self._client and self._connected:
-            try:
+            with contextlib.suppress(Exception):
                 self._run_coroutine(self._client.disconnect(), timeout=5)
-            except Exception:
-                pass
         self._connected = False
 
     def is_connected(self):

@@ -1,4 +1,3 @@
-# -*- coding: utf8 -*-
 #
 #  platform_ble/base.py
 #  Abstract BLE interface for CyKIT cross-platform Bluetooth LE support.

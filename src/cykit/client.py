@@ -1,18 +1,34 @@
 from __future__ import annotations
 
-import queue
+import contextlib
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 from Cryptodome.Cipher import AES
 
 from . import eeg
-from ._helpers import convert_epoc_plus_value, derive_key, model_channel_names, normalize_model, utc_now
+from ._helpers import (
+    convert_epoc_plus_value,
+    derive_key,
+    model_channel_names,
+    normalize_model,
+    utc_now,
+)
 from .control import ClientControl
 from .discovery import discover
 from .exceptions import ConnectionError, ControlError, RecordingError, StreamError
-from .models import ConnectionOptions, DataMode, DeviceInfo, Model, OutputOptions, PathLike, Sample, StreamOptions, Transport
+from .models import (
+    ConnectionOptions,
+    DataMode,
+    DeviceInfo,
+    Model,
+    OutputOptions,
+    PathLike,
+    Sample,
+    StreamOptions,
+    Transport,
+)
 
 
 class CyKitClient:
@@ -32,13 +48,19 @@ class CyKitClient:
         self,
         model: Model | int,
         *,
-        connection: ConnectionOptions = ConnectionOptions(),
-        stream: StreamOptions = StreamOptions(),
-        output: OutputOptions = OutputOptions(),
+        connection: ConnectionOptions | None = None,
+        stream: StreamOptions | None = None,
+        output: OutputOptions | None = None,
     ) -> None:
+        if connection is None:
+            connection = ConnectionOptions()
+        if stream is None:
+            stream = StreamOptions()
+        if output is None:
+            output = OutputOptions()
         self.model = normalize_model(model)
         self.connection = connection
-        self.stream = stream
+        self.stream_options = stream
         self.output = output
         self.control = ClientControl(self)
         self._connected = False
@@ -49,7 +71,7 @@ class CyKitClient:
         self._delimiter = stream.delimiter
         self._recording_path: Path | None = None
 
-    def __enter__(self) -> "CyKitClient":
+    def __enter__(self) -> CyKitClient:
         self.connect()
         return self
 
@@ -98,6 +120,8 @@ class CyKitClient:
 
     def close(self) -> None:
         """Close the active connection and release runtime state."""
+        if self._eeg is not None:
+            self._eeg.running = False
         if self._io is not None:
             self._io.setInfo("status", "False")
             try:
@@ -108,10 +132,16 @@ class CyKitClient:
         if eeg.eeg_driver == "bluetooth":
             backend = getattr(eeg, "_ble_backend", None)
             if backend is not None:
-                try:
+                with contextlib.suppress(Exception):
                     backend.disconnect()
-                except Exception:
-                    pass
+        if self._eeg is not None:
+            thread = getattr(self._eeg, "thread_1", None)
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=0.2)
+        server = getattr(self._io, "server", None) if self._io is not None else None
+        thread = getattr(server, "thread_2", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.2)
         self._connected = False
 
     def attach_server(self, server: object) -> None:
@@ -157,7 +187,9 @@ class CyKitClient:
             self.control.set_model(int(args[0]))
             return None
         if command == "setMask" and len(args) >= 2:
-            self.control.set_mask(int(args[0]), [int(value) for value in args[1].split(",") if value])
+            self.control.set_mask(
+                int(args[0]), [int(value) for value in args[1].split(",") if value]
+            )
             return None
         if self._io is None:
             raise ControlError("Client is not connected")
@@ -176,10 +208,8 @@ class CyKitClient:
             raise StreamError("Client is not connected")
 
         if eeg.tasks.empty():
-            try:
+            with contextlib.suppress(Exception):
                 eeg.tasks.queue.clear()
-            except Exception:
-                pass
 
         while self._connected:
             if eeg.tasks.empty():
@@ -211,10 +241,19 @@ class CyKitClient:
                         return device
             if matches:
                 return matches[0]
-        matches = discover(transport=Transport.USB if self.connection.transport == Transport.USB else Transport.AUTO, timeout=self.connection.scan_timeout)
+        matches = discover(
+            transport=Transport.USB
+            if self.connection.transport == Transport.USB
+            else Transport.AUTO,
+            timeout=self.connection.scan_timeout,
+        )
         if matches:
             return matches[0]
-        return DeviceInfo(name="Unknown", device_key=self.connection.device_key, transport=self.connection.transport)
+        return DeviceInfo(
+            name="Unknown",
+            device_key=self.connection.device_key,
+            transport=self.connection.transport,
+        )
 
     def _build_legacy_config(self) -> str:
         parts: list[str] = ["noweb"]
@@ -223,7 +262,7 @@ class CyKitClient:
             parts.append(f"bluetooth={key}" if key else "bluetooth")
         if self.output.verbose:
             parts.append("verbose")
-        if not self.stream.include_header:
+        if not self.stream_options.include_header:
             parts.append("noheader")
         if self.output.no_counter:
             parts.append("nocounter")
@@ -239,19 +278,19 @@ class CyKitClient:
             parts.append("outputdata")
         if self.output.output_raw:
             parts.append("outputraw")
-        if self.stream.baseline:
+        if self.stream_options.baseline:
             parts.append("baseline")
-        if self.stream.filter_enabled:
+        if self.stream_options.filter_enabled:
             parts.append("filter")
-        if self.stream.openvibe:
+        if self.stream_options.openvibe:
             parts.append("openvibe")
-            parts.append(f"ovdelay:{self.stream.openvibe_delay:03d}")
-            parts.append(f"ovsamples:{self.stream.openvibe_samples:03d}")
+            parts.append(f"ovdelay:{self.stream_options.openvibe_delay:03d}")
+            parts.append(f"ovsamples:{self.stream_options.openvibe_samples:03d}")
         parts.append(f"format-{self.output.format}")
         parts.append(f"delimiter={ord(self._delimiter)}")
-        if self.stream.data_mode == DataMode.ALL:
+        if self.stream_options.data_mode == DataMode.ALL:
             parts.append("allmode")
-        elif self.stream.data_mode == DataMode.GYRO:
+        elif self.stream_options.data_mode == DataMode.GYRO:
             parts.append("gyromode")
         else:
             parts.append("eegmode")
@@ -278,7 +317,14 @@ class CyKitClient:
         if eeg.eeg_driver == "bluetooth":
             if getattr(eeg, "BTLE_device_name", "") == "Insight":
                 decrypted = self._cipher.decrypt(raw_bytes[0:16])
-                return raw_bytes[19:20] + decrypted[0:1] + decrypted[1:16] + raw_bytes[16:17] + raw_bytes[17:18] + raw_bytes[18:19]
+                return (
+                    raw_bytes[19:20]
+                    + decrypted[0:1]
+                    + decrypted[1:16]
+                    + raw_bytes[16:17]
+                    + raw_bytes[17:18]
+                    + raw_bytes[18:19]
+                )
             if len(raw_bytes) == 32:
                 return self._cipher.decrypt(raw_bytes)
             return self._cipher.decrypt(raw_bytes[0:16]) + self._cipher.decrypt(raw_bytes[16:32])
@@ -288,9 +334,9 @@ class CyKitClient:
         if len(data) < 18:
             return None
         packet_kind = int(data[1])
-        if packet_kind == 16 and self.stream.data_mode == DataMode.GYRO:
+        if packet_kind == 16 and self.stream_options.data_mode == DataMode.GYRO:
             return None
-        if packet_kind == 32 and self.stream.data_mode == DataMode.EEG:
+        if packet_kind == 32 and self.stream_options.data_mode == DataMode.EEG:
             return None
 
         names = model_channel_names(self.model)
@@ -307,7 +353,7 @@ class CyKitClient:
 
         battery = None if self.output.no_battery else int(data[16])
         quality = None if self.output.no_battery else int(data[17])
-        raw = raw_bytes if self.stream.include_raw else None
+        raw = raw_bytes if self.stream_options.include_raw else None
         return Sample(
             captured_at=utc_now(),
             eeg=eeg_values,
@@ -333,7 +379,7 @@ class CyKitClient:
 
         battery = None if self.output.no_battery or len(data) < 18 else int(data[16])
         quality = None if self.output.no_battery or len(data) < 18 else int(data[17])
-        raw = raw_bytes if self.stream.include_raw else None
+        raw = raw_bytes if self.stream_options.include_raw else None
         return Sample(
             captured_at=utc_now(),
             eeg=eeg_values,
@@ -351,7 +397,7 @@ class CyKitClient:
             names[index]: float(self._eeg.convertEPOC(data[1:], self._eeg.mask[index]))
             for index in range(len(names))
         }
-        raw = raw_bytes if self.stream.include_raw else None
+        raw = raw_bytes if self.stream_options.include_raw else None
         return Sample(
             captured_at=utc_now(),
             eeg=eeg_values,
@@ -360,16 +406,16 @@ class CyKitClient:
         )
 
     def _set_data_mode(self, mode: DataMode | int) -> None:
-        self.stream = StreamOptions(
+        self.stream_options = StreamOptions(
             data_mode=DataMode(int(mode)),
-            include_header=self.stream.include_header,
-            include_raw=self.stream.include_raw,
-            delimiter=self.stream.delimiter,
-            baseline=self.stream.baseline,
-            filter_enabled=self.stream.filter_enabled,
-            openvibe=self.stream.openvibe,
-            openvibe_delay=self.stream.openvibe_delay,
-            openvibe_samples=self.stream.openvibe_samples,
+            include_header=self.stream_options.include_header,
+            include_raw=self.stream_options.include_raw,
+            delimiter=self.stream_options.delimiter,
+            baseline=self.stream_options.baseline,
+            filter_enabled=self.stream_options.filter_enabled,
+            openvibe=self.stream_options.openvibe,
+            openvibe_delay=self.stream_options.openvibe_delay,
+            openvibe_samples=self.stream_options.openvibe_samples,
         )
         if self._io is not None:
             self._io.datamode = int(mode)
@@ -392,16 +438,16 @@ class CyKitClient:
             self._io.setInfo("format", str(value))
 
     def _set_baseline_mode(self, enabled: bool) -> None:
-        self.stream = StreamOptions(
-            data_mode=self.stream.data_mode,
-            include_header=self.stream.include_header,
-            include_raw=self.stream.include_raw,
-            delimiter=self.stream.delimiter,
+        self.stream_options = StreamOptions(
+            data_mode=self.stream_options.data_mode,
+            include_header=self.stream_options.include_header,
+            include_raw=self.stream_options.include_raw,
+            delimiter=self.stream_options.delimiter,
             baseline=enabled,
-            filter_enabled=self.stream.filter_enabled,
-            openvibe=self.stream.openvibe,
-            openvibe_delay=self.stream.openvibe_delay,
-            openvibe_samples=self.stream.openvibe_samples,
+            filter_enabled=self.stream_options.filter_enabled,
+            openvibe=self.stream_options.openvibe,
+            openvibe_delay=self.stream_options.openvibe_delay,
+            openvibe_samples=self.stream_options.openvibe_samples,
         )
         if self._io is not None:
             self._io.setBaselineMode(enabled)
@@ -441,7 +487,7 @@ class CyKitClient:
             target.unlink()
         self._io.recordFile = target.stem
         self._io.recordInc = 0
-        self._io.cyFile = open(target, "w+", newline="")
+        self._io.cyFile = open(target, "w+", newline="")  # noqa: SIM115
         self._io.setInfo("recording", "True")
         self._io.packet_count = 0
         self._recording_path = target

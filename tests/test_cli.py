@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import typer
 
 from cykit.main import _build_modern_parameters, cli, parse_legacy_config
 from cykit.models import DeviceInfo, Model, Transport
@@ -61,17 +62,22 @@ def test_cli_accepts_help() -> None:
 
 
 def test_legacy_usage_requires_max_four_arguments() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(typer.BadParameter, match="at most 4 arguments"):
         cli(["127.0.0.1", "54123", "4", "noweb", "extra"])
 
 
 def test_cli_bluetooth_autodetect_failure_returns_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("cykit.main._run_once", lambda config: (_ for _ in ()).throw(RuntimeError("Bluetooth device discovery failed")))
+    monkeypatch.setattr(
+        "cykit.main._run_once",
+        lambda config: (_ for _ in ()).throw(RuntimeError("Bluetooth device discovery failed")),
+    )
     exit_code = cli(["run", "127.0.0.1", "54123", "4", "--bluetooth", "--noweb"])
     assert exit_code == 1
 
 
-def test_discover_json_output(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_discover_json_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         "cykit.main.discover_devices",
         lambda transport, timeout, probe_gatt, probe_timeout: [
@@ -93,7 +99,9 @@ def test_discover_json_output(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Ca
     assert payload[0]["transport"] == "bluetooth"
 
 
-def test_discover_text_output(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_discover_text_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         "cykit.main.discover_devices",
         lambda transport, timeout, probe_gatt, probe_timeout: [

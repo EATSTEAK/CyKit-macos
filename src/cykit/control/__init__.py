@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..exceptions import ControlError, RecordingError
+from ..exceptions import ControlError
 from ..models import DataMode, PathLike
 
 

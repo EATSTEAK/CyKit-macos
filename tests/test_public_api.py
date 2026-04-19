@@ -7,13 +7,10 @@ import pytest
 
 from cykit import (
     CyKitClient,
-    ConnectionOptions,
     DataMode,
     DeviceInfo,
     Model,
-    OutputOptions,
     Sample,
-    StreamOptions,
     Transport,
     discover,
 )
@@ -46,7 +43,7 @@ def test_sample_contract_is_typed() -> None:
 def test_client_control_updates_stream_options() -> None:
     client = CyKitClient(Model.INSIGHT_CONSUMER)
     client.control.set_data_mode(DataMode.GYRO)
-    assert client.stream.data_mode == DataMode.GYRO
+    assert client.stream_options.data_mode == DataMode.GYRO
 
 
 def test_recording_path_requires_connection(tmp_path: Path) -> None:

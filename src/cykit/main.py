@@ -6,7 +6,6 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass
-from enum import Enum
 from typing import Annotated
 
 import typer
@@ -15,7 +14,14 @@ from cykit import websocket
 from cykit.client import CyKitClient
 from cykit.discovery import discover as discover_devices
 from cykit.exceptions import ConnectionError
-from cykit.models import ConnectionOptions, DeviceInfo, Model, OutputOptions, StreamOptions, Transport
+from cykit.models import (
+    ConnectionOptions,
+    DeviceInfo,
+    Model,
+    OutputOptions,
+    StreamOptions,
+    Transport,
+)
 
 app = typer.Typer(add_completion=False, help="CyKit CLI")
 
@@ -62,7 +68,7 @@ def _token_set(parameters: str) -> set[str]:
 def _extract_prefixed_value(parameters: str, prefix: str) -> str | None:
     for token in _token_set(parameters):
         if token.startswith(prefix):
-            return token[len(prefix):]
+            return token[len(prefix) :]
     return None
 
 
@@ -81,7 +87,9 @@ def parse_legacy_config(parameters: str) -> tuple[ConnectionOptions, StreamOptio
         filter_enabled="filter" in tokens,
         openvibe="openvibe" in tokens,
         openvibe_delay=int(ovdelay_value) if ovdelay_value and ovdelay_value.isdigit() else 100,
-        openvibe_samples=int(ovsamples_value) if ovsamples_value and ovsamples_value.isdigit() else 4,
+        openvibe_samples=int(ovsamples_value)
+        if ovsamples_value and ovsamples_value.isdigit()
+        else 4,
     )
     output = OutputOptions(
         format=int(format_value) if format_value and format_value.isdigit() else 0,
@@ -125,7 +133,7 @@ def _active_thread_count(noweb: bool) -> int:
         count += 1
     if "eegThread" in names:
         count += 1
-    return count - (0 if noweb else 0)
+    return count
 
 
 def _run_once(config: RunConfig) -> bool:
@@ -177,7 +185,7 @@ def _run_once(config: RunConfig) -> bool:
                     return True
                 continue
 
-            if noweb and _info_is_true(client.io, "stream_ready") == False and check_threads >= 1:
+            if noweb and not _info_is_true(client.io, "stream_ready") and check_threads >= 1:
                 continue
 
             if check_threads < (1 if noweb else 2):
@@ -191,7 +199,7 @@ def _run_once(config: RunConfig) -> bool:
     return False
 
 
-def run_session(config: RunConfig) -> None:
+def run_session(config: RunConfig) -> int:
     while True:
         try:
             should_restart = _run_once(config)
@@ -207,7 +215,7 @@ def run_session(config: RunConfig) -> None:
             mirror(traceback.format_exc())
             mirror(" ) WARNING_) CyKIT2._run E1: " + str(exc))
             mirror("Error # " + str(exc))
-            should_restart = False
+            return 1
         except Exception as exc:
             exc_type, ex, tb = sys.exc_info()
             imported_tb_info = traceback.extract_tb(tb)[-1]
@@ -218,11 +226,10 @@ def run_session(config: RunConfig) -> None:
             mirror(traceback.format_exc())
             mirror(" ) WARNING_) CyKIT2._run E1: " + str(exc))
             mirror("Error # " + str(exc))
-            mirror("> Device Time Out or Disconnect . . .  [ Reconnect to Server. ]")
-            should_restart = True
+            return 1
 
         if not should_restart:
-            return
+            return 0
 
 
 def _validate_model(model: int) -> int:
@@ -290,7 +297,9 @@ def _build_modern_parameters(
     add("noweb", noweb)
 
     if bluetooth_key:
-        tokens = [token for token in tokens if token != "bluetooth" and not token.startswith("bluetooth=")]
+        tokens = [
+            token for token in tokens if token != "bluetooth" and not token.startswith("bluetooth=")
+        ]
         tokens.append(f"bluetooth={bluetooth_key}")
     elif bluetooth_auto and not any(token.startswith("bluetooth") for token in tokens):
         tokens.append("bluetooth")
@@ -342,13 +351,28 @@ def _print_device_info(device: DeviceInfo) -> None:
 
 @app.command()
 def discover(
-    transport: Annotated[Transport, typer.Option("--transport", help="Transport to scan.")] = Transport.AUTO,
-    timeout: Annotated[float, typer.Option("--timeout", min=0.1, help="Scan timeout in seconds.")] = 15.0,
-    json_output: Annotated[bool, typer.Option("--json", help="Print discovery results as JSON.")] = False,
+    transport: Annotated[
+        Transport, typer.Option("--transport", help="Transport to scan.")
+    ] = Transport.AUTO,
+    timeout: Annotated[
+        float, typer.Option("--timeout", min=0.1, help="Scan timeout in seconds.")
+    ] = 15.0,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print discovery results as JSON.")
+    ] = False,
 ) -> None:
-    devices = discover_devices(transport=transport, timeout=timeout, probe_gatt=True, probe_timeout=2.0)
+    devices = discover_devices(
+        transport=transport, timeout=timeout, probe_gatt=True, probe_timeout=2.0
+    )
     if json_output:
-        typer.echo(json.dumps([_serialize_device_info(device) for device in devices], ensure_ascii=False, indent=2, sort_keys=True))
+        typer.echo(
+            json.dumps(
+                [_serialize_device_info(device) for device in devices],
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
     if not devices:
         typer.echo("No devices found.")
@@ -364,9 +388,7 @@ def _looks_like_legacy_args(argv: list[str]) -> bool:
     first = argv[0]
     if first in {"run", "discover", "help", "--help", "-h", "/?"}:
         return False
-    if first.startswith("-"):
-        return False
-    return True
+    return not first.startswith("-")
 
 
 def _legacy_config_from_argv(argv: list[str]) -> RunConfig:
@@ -393,7 +415,9 @@ def run(
     ],
     config: Annotated[str, typer.Argument(help="Legacy + separated config string.")] = "",
     verbose: Annotated[bool, typer.Option("--verbose", help="Enable verbose output.")] = False,
-    info: Annotated[bool, typer.Option("--info", help="Keep legacy info token for compatibility.")] = False,
+    info: Annotated[
+        bool, typer.Option("--info", help="Keep legacy info token for compatibility.")
+    ] = False,
     confirm: Annotated[bool, typer.Option("--confirm", help="Confirm device selection.")] = False,
     noheader: Annotated[bool, typer.Option("--noheader", help="Disable CyKITv2 headers.")] = False,
     nocounter: Annotated[bool, typer.Option("--nocounter", help="Drop counter columns.")] = False,
@@ -401,21 +425,37 @@ def run(
     blankdata: Annotated[bool, typer.Option("--blankdata", help="Inject blank data.")] = False,
     blankcsv: Annotated[bool, typer.Option("--blankcsv", help="Add blank CSV columns.")] = False,
     outputdata: Annotated[bool, typer.Option("--outputdata", help="Print decoded output.")] = False,
-    outputraw: Annotated[bool, typer.Option("--outputraw", help="Print encrypted packets.")] = False,
+    outputraw: Annotated[
+        bool, typer.Option("--outputraw", help="Print encrypted packets.")
+    ] = False,
     generic: Annotated[bool, typer.Option("--generic", help="Use generic TCP mode.")] = False,
     openvibe: Annotated[bool, typer.Option("--openvibe", help="Use OpenViBE mode.")] = False,
     integer: Annotated[bool, typer.Option("--integer", help="Emit integer values.")] = False,
     baseline: Annotated[bool, typer.Option("--baseline", help="Enable baseline mode.")] = False,
-    filter_enabled: Annotated[bool, typer.Option("--filter", help="Enable baseline filter.")] = False,
+    filter_enabled: Annotated[
+        bool, typer.Option("--filter", help="Enable baseline filter.")
+    ] = False,
     allmode: Annotated[bool, typer.Option("--allmode", help="Emit EEG and gyro packets.")] = False,
     gyromode: Annotated[bool, typer.Option("--gyromode", help="Emit gyro packets only.")] = False,
-    noweb: Annotated[bool, typer.Option("--noweb", help="Run without TCP/WebSocket listener.")] = False,
-    bluetooth_key: Annotated[str | None, typer.Option("--bluetooth-key", help="Use a paired Bluetooth device key.")] = None,
-    bluetooth_auto: Annotated[bool, typer.Option("--bluetooth", help="Auto-detect paired Bluetooth device.")] = False,
-    format_value: Annotated[int | None, typer.Option("--format", min=0, max=3, help="Output format.")] = None,
-    ovdelay: Annotated[int | None, typer.Option("--ovdelay", min=0, max=999, help="OpenViBE delay multiplier.")] = None,
-    ovsamples: Annotated[int | None, typer.Option("--ovsamples", min=1, max=999, help="OpenViBE sample rate.")] = None,
-) -> None:
+    noweb: Annotated[
+        bool, typer.Option("--noweb", help="Run without TCP/WebSocket listener.")
+    ] = False,
+    bluetooth_key: Annotated[
+        str | None, typer.Option("--bluetooth-key", help="Use a paired Bluetooth device key.")
+    ] = None,
+    bluetooth_auto: Annotated[
+        bool, typer.Option("--bluetooth", help="Auto-detect paired Bluetooth device.")
+    ] = False,
+    format_value: Annotated[
+        int | None, typer.Option("--format", min=0, max=3, help="Output format.")
+    ] = None,
+    ovdelay: Annotated[
+        int | None, typer.Option("--ovdelay", min=0, max=999, help="OpenViBE delay multiplier.")
+    ] = None,
+    ovsamples: Annotated[
+        int | None, typer.Option("--ovsamples", min=1, max=999, help="OpenViBE sample rate.")
+    ] = None,
+) -> int:
     config_obj = RunConfig(
         host=host,
         port=_validate_port(port),
@@ -447,7 +487,7 @@ def run(
             ovsamples=ovsamples,
         ),
     )
-    run_session(config_obj)
+    return run_session(config_obj)
 
 
 @app.callback(invoke_without_command=True)
@@ -458,8 +498,7 @@ def main(ctx: typer.Context) -> None:
         legacy = _legacy_config_from_argv(ctx.args)
         legacy.port = _validate_port(legacy.port)
         legacy.model = _validate_model(legacy.model)
-        run_session(legacy)
-        raise typer.Exit()
+        raise typer.Exit(run_session(legacy))
     typer.echo(HELP_TEXT)
     raise typer.Exit()
 
@@ -470,11 +509,9 @@ def cli(argv: list[str] | None = None) -> int:
         legacy = _legacy_config_from_argv(arguments)
         legacy.port = _validate_port(legacy.port)
         legacy.model = _validate_model(legacy.model)
-        run_session(legacy)
-        return 0
+        return run_session(legacy)
     try:
-        app(args=arguments, prog_name="cykit", standalone_mode=False)
-        return 0
+        return int(app(args=arguments, prog_name="cykit", standalone_mode=False) or 0)
     except typer.Exit as exc:
         return int(exc.exit_code or 0)
     except typer.BadParameter as exc:
