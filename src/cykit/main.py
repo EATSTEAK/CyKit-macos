@@ -11,13 +11,13 @@ from typing import Annotated
 import typer
 
 from cykit import websocket
+from cykit._helpers import normalize_model
 from cykit.client import CyKitClient
 from cykit.discovery import discover as discover_devices
 from cykit.exceptions import ConnectionError
 from cykit.models import (
     ConnectionOptions,
     DeviceInfo,
-    Model,
     OutputOptions,
     StreamOptions,
     Transport,
@@ -57,28 +57,35 @@ def mirror(custom_string: object) -> None:
         return
 
 
-def _normalize_parameters(parameters: str) -> str:
-    return str(parameters or "").strip().lower()
+def _token_list(parameters: str) -> list[str]:
+    return [token.strip() for token in str(parameters or "").strip().split("+") if token.strip()]
 
 
 def _token_set(parameters: str) -> set[str]:
-    return {token for token in _normalize_parameters(parameters).split("+") if token}
+    return {token.lower() for token in _token_list(parameters)}
 
 
 def _extract_prefixed_value(parameters: str, prefix: str) -> str | None:
-    for token in _token_set(parameters):
-        if token.startswith(prefix):
+    normalized_prefix = prefix.lower()
+    for token in _token_list(parameters):
+        if token.lower().startswith(normalized_prefix):
             return token[len(prefix) :]
     return None
 
 
+def _normalize_bluetooth_key(device_key: str | None) -> str | None:
+    if device_key is None:
+        return None
+    normalized = device_key.strip()
+    return normalized.upper() or None
+
+
 def parse_legacy_config(parameters: str) -> tuple[ConnectionOptions, StreamOptions, OutputOptions]:
-    normalized = _normalize_parameters(parameters)
-    tokens = _token_set(normalized)
-    bluetooth_key = _extract_prefixed_value(normalized, "bluetooth=")
-    format_value = _extract_prefixed_value(normalized, "format-")
-    ovdelay_value = _extract_prefixed_value(normalized, "ovdelay:")
-    ovsamples_value = _extract_prefixed_value(normalized, "ovsamples:")
+    tokens = _token_set(parameters)
+    bluetooth_key = _normalize_bluetooth_key(_extract_prefixed_value(parameters, "bluetooth="))
+    format_value = _extract_prefixed_value(parameters, "format-")
+    ovdelay_value = _extract_prefixed_value(parameters, "ovdelay:")
+    ovsamples_value = _extract_prefixed_value(parameters, "ovsamples:")
 
     stream = StreamOptions(
         data_mode=(2 if "gyromode" in tokens else 0 if "allmode" in tokens else 1),
@@ -103,7 +110,9 @@ def parse_legacy_config(parameters: str) -> tuple[ConnectionOptions, StreamOptio
         output_raw="outputraw" in tokens,
     )
     connection = ConnectionOptions(
-        transport=Transport.BLUETOOTH if "bluetooth" in normalized else Transport.USB,
+        transport=Transport.BLUETOOTH
+        if any(token.startswith("bluetooth") for token in tokens)
+        else Transport.USB,
         device_key=bluetooth_key,
         confirm_device="confirm" in tokens,
     )
@@ -112,7 +121,7 @@ def parse_legacy_config(parameters: str) -> tuple[ConnectionOptions, StreamOptio
 
 def _build_client(model: int, parameters: str) -> CyKitClient:
     connection, stream, output = parse_legacy_config(parameters)
-    return CyKitClient(Model(model), connection=connection, stream=stream, output=output)
+    return CyKitClient(normalize_model(model), connection=connection, stream=stream, output=output)
 
 
 def _info_is_true(io: object | None, name: str) -> bool:
@@ -126,24 +135,14 @@ def _info_is_true(io: object | None, name: str) -> bool:
     return bool(value)
 
 
-def _active_thread_count(noweb: bool) -> int:
-    names = {thread.name for thread in threading.enumerate()}
-    count = 0
-    if "ioThread" in names:
-        count += 1
-    if "eegThread" in names:
-        count += 1
-    return count
-
-
 def _run_once(config: RunConfig) -> bool:
-    parameters = _normalize_parameters(config.parameters)
-    noweb = "noweb" in parameters
+    tokens = _token_set(config.parameters)
+    noweb = "noweb" in tokens
 
-    client = _build_client(config.model, parameters)
+    client = _build_client(config.model, config.parameters)
     client.connect()
 
-    if "bluetooth" in parameters:
+    if any(token.startswith("bluetooth") for token in tokens):
         mirror("> [Bluetooth] Pairing Device . . .")
     elif not noweb:
         mirror("> Listening on " + config.host + " : " + str(config.port))
@@ -153,7 +152,7 @@ def _run_once(config: RunConfig) -> bool:
     io_thread = None
     try:
         if not noweb:
-            io_thread = websocket.socketIO(config.port, 0 if "generic" in parameters else 1, client)
+            io_thread = websocket.socketIO(config.port, 0 if "generic" in tokens else 1, client)
             client.attach_server(io_thread)
             time.sleep(1)
             io_thread.Connect()
@@ -233,8 +232,10 @@ def run_session(config: RunConfig) -> int:
 
 
 def _validate_model(model: int) -> int:
-    if model < 1 or model > 9:
-        raise typer.BadParameter("Model must be a numeric value from 1 to 9.")
+    try:
+        normalize_model(model)
+    except ValueError as exc:
+        raise typer.BadParameter("Model must be a numeric value from 1 to 7.") from exc
     return model
 
 
@@ -296,11 +297,12 @@ def _build_modern_parameters(
     add("gyromode", gyromode)
     add("noweb", noweb)
 
-    if bluetooth_key:
+    normalized_bluetooth_key = _normalize_bluetooth_key(bluetooth_key)
+    if normalized_bluetooth_key:
         tokens = [
             token for token in tokens if token != "bluetooth" and not token.startswith("bluetooth=")
         ]
-        tokens.append(f"bluetooth={bluetooth_key}")
+        tokens.append(f"bluetooth={normalized_bluetooth_key}")
     elif bluetooth_auto and not any(token.startswith("bluetooth") for token in tokens):
         tokens.append("bluetooth")
 
@@ -338,15 +340,13 @@ def _serialize_device_info(device: DeviceInfo) -> dict[str, object]:
 
 
 def _print_device_info(device: DeviceInfo) -> None:
-    payload = _serialize_device_info(device)
-    typer.echo(f"name={payload['name']}")
-    typer.echo(f"  transport={payload['transport']}")
-    typer.echo(f"  model_guess={payload['model_guess']}")
-    typer.echo(f"  device_key={payload['device_key']}")
-    typer.echo(f"  serial={payload['serial']}")
-    typer.echo(f"  address={payload['address']}")
-    typer.echo(f"  rssi={payload['rssi']}")
-    typer.echo(f"  metadata={json.dumps(payload['metadata'], ensure_ascii=False, sort_keys=True)}")
+    typer.echo(f"name={device.name}")
+    typer.echo(f"  transport={device.transport.value}")
+    typer.echo(
+        f"  model_guess={device.model_guess.name if device.model_guess is not None else None}"
+    )
+    typer.echo(f"  device_key={device.device_key}")
+    typer.echo(f"  serial={device.serial}")
 
 
 @app.command()

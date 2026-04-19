@@ -70,6 +70,7 @@ class CyKitClient:
         self._cipher = None
         self._delimiter = stream.delimiter
         self._recording_path: Path | None = None
+        self._resolved_device_info: DeviceInfo | None = None
 
     def __enter__(self) -> CyKitClient:
         self.connect()
@@ -112,6 +113,7 @@ class CyKitClient:
                     "Device discovery did not produce a valid 16-byte serial. Bluetooth auto-detect may have failed to match the headset name or key."
                 )
             self._cipher = AES.new(derive_key(serial_bytes, self.model), AES.MODE_ECB)
+            self._resolved_device_info = self._build_resolved_device_info()
             self._device_info = self._resolve_device_info()
             self._connected = True
         except Exception as exc:
@@ -232,15 +234,23 @@ class CyKitClient:
             return bytes(ord(char) for char in serial)
         return bytes(serial)
 
+    def _build_resolved_device_info(self) -> DeviceInfo | None:
+        if self.connection.transport != Transport.BLUETOOTH or self._eeg is None:
+            return None
+        serial = self._eeg.serial_number
+        serial_value = serial if isinstance(serial, str) else bytes(serial).hex().upper()
+        if not serial_value:
+            return None
+        return DeviceInfo(
+            name=getattr(eeg, "BTLE_device_name", "Unknown") or "Unknown",
+            device_key=self.connection.device_key,
+            transport=Transport.BLUETOOTH,
+            serial=serial_value,
+        )
+
     def _resolve_device_info(self) -> DeviceInfo:
-        if self.connection.transport == Transport.BLUETOOTH:
-            matches = discover(transport=Transport.BLUETOOTH, timeout=self.connection.scan_timeout)
-            if self.connection.device_key:
-                for device in matches:
-                    if device.device_key == self.connection.device_key:
-                        return device
-            if matches:
-                return matches[0]
+        if self._resolved_device_info is not None:
+            return self._resolved_device_info
         matches = discover(
             transport=Transport.USB
             if self.connection.transport == Transport.USB
