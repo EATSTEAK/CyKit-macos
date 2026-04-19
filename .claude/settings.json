@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(jq -r '.tool_input.file_path // .tool_response.filePath // empty'); if [ -n \"$FILE\" ] && [ \"${FILE##*.}\" = \"py\" ] && [[ \"$FILE\" == *'/src/'* || \"$FILE\" == *'/tests/'* ]]; then uv run ruff check --fix \"$FILE\" && uv run ruff format \"$FILE\"; fi",
+            "timeout": 60,
+            "statusMessage": "Running Ruff on edited Python file"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ruff check src tests && uv run basedpyright",
+            "timeout": 300,
+            "statusMessage": "Running project static analysis"
+          }
+        ]
+      }
+    ]
+  }
+}
